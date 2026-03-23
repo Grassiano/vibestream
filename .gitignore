@@ -1,0 +1,19 @@
+node_modules/
+out/
+*.vsix
+.env
+dist/
+
+# Backend
+backend/__pycache__/
+backend/.venv/
+backend/*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
