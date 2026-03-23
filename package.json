@@ -1,0 +1,163 @@
+{
+  "name": "vibestream",
+  "displayName": "VibeStream",
+  "description": "Turn your coding session into a live stream — AI viewers, XP progression, vibe coding coaching",
+  "version": "0.1.0",
+  "publisher": "grassiano",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Grassiano/vibestream"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "vibe",
+    "coding",
+    "stream",
+    "live",
+    "ai",
+    "xp",
+    "progression",
+    "coaching",
+    "entertainment",
+    "fun"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vibeStream.toggle",
+        "title": "VibeStream: Toggle On/Off",
+        "icon": "media/icon.svg"
+      },
+      {
+        "command": "vibeStream.show",
+        "title": "VibeStream: Show"
+      },
+      {
+        "command": "vibeStream.settings",
+        "title": "VibeStream: Open Settings"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "vibeStream.toggle",
+        "key": "ctrl+shift+v",
+        "mac": "cmd+shift+v"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "vibeStream.toggle",
+          "group": "navigation"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vibestream",
+          "title": "VibeStream",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "vibestream": [
+        {
+          "type": "webview",
+          "id": "vibeStream.panel",
+          "name": "VibeStream",
+          "visibility": "visible"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "VibeStream",
+      "properties": {
+        "vibeStream.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable VibeStream"
+        },
+        "vibeStream.streamerName": {
+          "type": "string",
+          "default": "",
+          "description": "Your streamer name"
+        },
+        "vibeStream.language": {
+          "type": "string",
+          "default": "he",
+          "enum": [
+            "he",
+            "en",
+            "es",
+            "pt",
+            "fr",
+            "de",
+            "ja",
+            "ru",
+            "ar"
+          ],
+          "enumDescriptions": [
+            "Hebrew",
+            "English",
+            "Spanish",
+            "Portuguese",
+            "French",
+            "German",
+            "Japanese",
+            "Russian",
+            "Arabic"
+          ],
+          "description": "Stream language"
+        },
+        "vibeStream.chatStyle": {
+          "type": "string",
+          "default": "hype",
+          "enum": [
+            "hype",
+            "chill",
+            "savage"
+          ],
+          "enumDescriptions": [
+            "Hype — High energy, celebrates everything",
+            "Chill — Relaxed and supportive",
+            "Savage — Tough love, no mercy"
+          ],
+          "description": "Chat style"
+        },
+        "vibeStream.licenseKey": {
+          "type": "string",
+          "default": "",
+          "description": "Pro license key"
+        },
+        "vibeStream.backendUrl": {
+          "type": "string",
+          "default": "https://backend-production-6558.up.railway.app",
+          "description": "Backend API URL"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap && esbuild webview/app.ts --bundle --outfile=out/webview.js --format=iife --platform=browser --sourcemap",
+    "watch": "npm run build -- --watch",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^25.4.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.0"
+  }
+}
