@@ -157,6 +157,13 @@ export class PanelManager implements vscode.WebviewViewProvider {
     });
   }
 
+  sendDailyChallenges(data: unknown): void {
+    this.view?.webview.postMessage({
+      type: 'daily-challenges',
+      payload: data,
+    });
+  }
+
   sendAlert(alertType: string, data: Record<string, unknown>): void {
     this.view?.webview.postMessage({
       type: 'alert',
@@ -808,6 +815,137 @@ export class PanelManager implements vscode.WebviewViewProvider {
       color: #efeff1;
       background: rgba(255,255,255,0.1);
     }
+    /* ═══ Daily Challenges ═══ */
+    #challenges-panel {
+      display: none;
+      background: #18181b;
+      border-top: 1px solid #2f2f35;
+      padding: 0;
+      overflow: hidden;
+      flex-shrink: 0;
+      max-height: 0;
+      transition: max-height 0.3s ease, padding 0.3s ease;
+    }
+    #challenges-panel.active {
+      display: block;
+      max-height: 200px;
+      padding: 8px 12px;
+    }
+    #challenges-toggle {
+      background: none;
+      border: none;
+      color: #71717a;
+      font-size: 11px;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: color 0.15s;
+      flex-shrink: 0;
+    }
+    #challenges-toggle:hover { color: #efeff1; }
+    #challenges-toggle.has-challenges { color: #fbbf24; }
+    .challenge-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .challenge-title {
+      font-size: 10px;
+      font-weight: 800;
+      color: #adadb8;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .challenge-date {
+      font-size: 9px;
+      color: #52525b;
+    }
+    .challenge-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 0;
+      font-size: 11px;
+    }
+    .challenge-item + .challenge-item {
+      border-top: 1px solid rgba(255,255,255,0.04);
+    }
+    .challenge-icon {
+      font-size: 14px;
+      width: 20px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .challenge-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .challenge-name {
+      color: #efeff1;
+      font-weight: 700;
+      font-size: 11px;
+    }
+    .challenge-desc {
+      color: #71717a;
+      font-size: 9px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .challenge-progress {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .challenge-bar {
+      width: 40px;
+      height: 4px;
+      background: #2f2f35;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .challenge-bar-fill {
+      height: 100%;
+      background: #9146ff;
+      border-radius: 2px;
+      transition: width 0.5s ease;
+    }
+    .challenge-bar-fill.complete {
+      background: #4ade80;
+    }
+    .challenge-count {
+      font-size: 9px;
+      color: #71717a;
+      font-weight: 600;
+      min-width: 24px;
+      text-align: right;
+    }
+    .challenge-item.completed .challenge-name {
+      color: #4ade80;
+      text-decoration: line-through;
+      text-decoration-color: rgba(74,222,128,0.3);
+    }
+    .challenge-item.completed .challenge-count {
+      color: #4ade80;
+    }
+    .challenge-xp {
+      font-size: 9px;
+      color: #a855f7;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .challenge-item.completed .challenge-xp {
+      color: #4ade80;
+    }
+    .challenges-all-done {
+      text-align: center;
+      padding: 4px 0 2px;
+      font-size: 10px;
+      color: #fbbf24;
+      font-weight: 700;
+    }
     /* ═══ Setup Screen ═══ */
     #setup-screen {
       display: none;
@@ -933,7 +1071,8 @@ export class PanelManager implements vscode.WebviewViewProvider {
 <body>
   <div id="stage">
     <div id="setup-screen">
-      <h2>Stream Setup</h2>
+      <h2 id="setup-title">Stream Setup</h2>
+      <p id="setup-subtitle" style="color:#71717a;font-size:11px;text-align:center;margin:-8px 0 0;max-width:240px;line-height:1.4"></p>
       <span class="setup-label">YOUR NAME</span>
       <input id="setup-name" type="text" placeholder="streamer name" maxlength="20" autocomplete="off" />
       <span class="setup-label">LANGUAGE</span>
@@ -994,6 +1133,7 @@ export class PanelManager implements vscode.WebviewViewProvider {
         <span id="stream-label"><span class="live-badge">LIVE</span> STREAM CHAT</span>
         <span style="display:flex;align-items:center;gap:8px">
           <span id="viewer-count"><span class="eye-icon">&#128065;</span><span id="viewer-num">0</span></span>
+          <button id="challenges-toggle" title="Daily Challenges">&#127942;</button>
           <button id="settings-btn" title="Edit stream settings">&#9881;</button>
         </span>
       </div>
@@ -1002,6 +1142,13 @@ export class PanelManager implements vscode.WebviewViewProvider {
       <div id="chat-input-bar">
         <input id="chat-input" type="text" placeholder="Send a message" maxlength="120" autocomplete="off" />
         <button id="chat-send-btn">Chat</button>
+      </div>
+      <div id="challenges-panel">
+        <div class="challenge-header">
+          <span class="challenge-title">&#127942; Daily Challenges</span>
+          <span class="challenge-date" id="challenges-date"></span>
+        </div>
+        <div id="challenges-list"></div>
       </div>
       <div id="xp-bar-container">
         <span id="xp-level-badge">Lv.1</span>

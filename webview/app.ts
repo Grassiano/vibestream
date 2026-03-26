@@ -268,6 +268,17 @@ window.addEventListener('message', (event) => {
         if (needsSetup) {
           isEditMode = editMode ?? false;
           setupGoBtn.textContent = isEditMode ? 'SAVE' : 'GO LIVE';
+          const titleEl = document.getElementById('setup-title')!;
+          const subtitleEl = document.getElementById('setup-subtitle')!;
+          if (isEditMode) {
+            titleEl.textContent = 'Stream Settings';
+            subtitleEl.textContent = '';
+            subtitleEl.style.display = 'none';
+          } else {
+            titleEl.textContent = '📡 Welcome to VibeStream';
+            subtitleEl.textContent = 'Your coding session is about to go live. AI viewers will watch, react, and hype you up. Set up your stream below.';
+            subtitleEl.style.display = 'block';
+          }
           setupScreen.classList.add('active');
           if (!isEditMode) {
             streamChatContainer.classList.remove('active');
@@ -430,6 +441,19 @@ window.addEventListener('message', (event) => {
     case 'viewer-count': {
       const { count } = message.payload as { count: number };
       animateViewerCount(count);
+      break;
+    }
+
+    case 'daily-challenges': {
+      const data = message.payload as {
+        date: string;
+        challenges: Array<{
+          id: string; title: string; description: string; category: string;
+          target: number; xp_reward: number; current: number; completed: boolean;
+        }>;
+        allComplete: boolean;
+      };
+      renderChallenges(data);
       break;
     }
   }
@@ -692,6 +716,66 @@ profileOverlay.addEventListener('click', (e) => {
     profileOverlay.classList.remove('active');
   }
 });
+
+// ═══════════ Daily Challenges ═══════════
+const challengesPanel = document.getElementById('challenges-panel')!;
+const challengesList = document.getElementById('challenges-list')!;
+const challengesDate = document.getElementById('challenges-date')!;
+const challengesToggle = document.getElementById('challenges-toggle')!;
+let challengesVisible = false;
+
+challengesToggle.addEventListener('click', () => {
+  challengesVisible = !challengesVisible;
+  challengesPanel.classList.toggle('active', challengesVisible);
+});
+
+const CATEGORY_ICONS: Record<string, string> = {
+  prompting: '💬',
+  review: '👁️',
+  workflow: '⚙️',
+  focus: '🎯',
+};
+
+interface ChallengePayload {
+  date: string;
+  challenges: Array<{
+    id: string; title: string; description: string; category: string;
+    target: number; xp_reward: number; current: number; completed: boolean;
+  }>;
+  allComplete: boolean;
+}
+
+function renderChallenges(data: ChallengePayload): void {
+  challengesDate.textContent = data.date;
+  challengesToggle.classList.toggle('has-challenges', !data.allComplete);
+
+  let html = '';
+  for (const c of data.challenges) {
+    const pct = Math.min(100, (c.current / c.target) * 100);
+    const icon = CATEGORY_ICONS[c.category] ?? '⭐';
+    const doneClass = c.completed ? ' completed' : '';
+    const fillClass = c.completed ? ' complete' : '';
+
+    html += `<div class="challenge-item${doneClass}">
+      <span class="challenge-icon">${c.completed ? '✅' : icon}</span>
+      <div class="challenge-info">
+        <div class="challenge-name">${escapeHtml(c.title)}</div>
+        <div class="challenge-desc">${escapeHtml(c.description)}</div>
+      </div>
+      <div class="challenge-progress">
+        <div class="challenge-bar"><div class="challenge-bar-fill${fillClass}" style="width:${pct}%"></div></div>
+        <span class="challenge-count">${c.current}/${c.target}</span>
+      </div>
+      <span class="challenge-xp">${c.completed ? '✓' : `+${c.xp_reward}`}</span>
+    </div>`;
+  }
+
+  if (data.allComplete) {
+    html += '<div class="challenges-all-done">🎉 All challenges complete! +150 bonus XP</div>';
+  }
+
+  challengesList.innerHTML = html;
+}
 
 // Handle viewer name click in chat — delegate
 chatMessages.addEventListener('click', (e) => {

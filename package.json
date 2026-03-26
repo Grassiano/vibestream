@@ -152,12 +152,15 @@
   "scripts": {
     "build": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap && esbuild webview/app.ts --bundle --outfile=out/webview.js --format=iife --platform=browser --sourcemap",
     "watch": "npm run build -- --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "package": "vsce package"
   },
   "devDependencies": {
     "@types/node": "^25.4.0",
     "@types/vscode": "^1.85.0",
     "esbuild": "^0.20.0",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "vitest": "^4.1.1"
   }
 }

@@ -13,6 +13,7 @@ import { XPEngine, getXPForEvent } from './progression/xp-engine';
 import { AchievementTracker } from './progression/achievements';
 import { generateRecap } from './progression/session-recap';
 import { detectRole, LiveSyncMaster, LiveSyncSlave } from './stream/live-sync';
+import { DailyChallengeTracker } from './progression/daily-challenges';
 
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -140,6 +141,28 @@ export function activate(context: vscode.ExtensionContext): void {
   const achievementTracker = new AchievementTracker();
   let sessionMessagesTyped = 0;
   const sessionStartTime = Date.now();
+
+  // Daily challenges tracker
+  const challengeTracker = new DailyChallengeTracker();
+  challengeTracker.setOnUpdate((data) => {
+    panelManager.sendDailyChallenges(data);
+  });
+  challengeTracker.setOnComplete((challenge) => {
+    xpEngine.earnXP('daily-challenge');
+    panelManager.sendStreamChat(
+      [{ viewer: 'System', color: '#fbbf24', text: `🏆 Challenge complete: ${challenge.title}! +${challenge.xp_reward} XP` }],
+      viewerEngine.getCount(),
+    );
+  });
+  challengeTracker.setOnAllComplete(() => {
+    xpEngine.earnXP('all-dailies');
+    panelManager.sendStreamChat(
+      [{ viewer: 'System', color: '#ffd700', text: '🎉 ALL DAILY CHALLENGES COMPLETE! +150 bonus XP!' }],
+      viewerEngine.getCount(),
+    );
+    panelManager.sendAlert('achievement', { name: 'Daily Sweep', icon: '🧹' });
+  });
+  challengeTracker.fetchAndLoad(backendUrl);
 
   // Periodic achievement check — every 60 seconds
   const achievementTimer = setInterval(() => {
@@ -422,6 +445,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (getXPForEvent(event.type)) {
         xpEngine.earnXP(event.type);
       }
+
+      // Daily challenges — track coding events
+      challengeTracker.processEvent(event.type);
 
       // Stream chat — feed coding context
       if (!streamChat.isActive()) return;
