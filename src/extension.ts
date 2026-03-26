@@ -14,13 +14,22 @@ import { AchievementTracker } from './progression/achievements';
 import { generateRecap } from './progression/session-recap';
 import { detectRole, LiveSyncMaster, LiveSyncSlave } from './stream/live-sync';
 
-let streamActive = false;
 
 export function activate(context: vscode.ExtensionContext): void {
   const config = vscode.workspace.getConfiguration('vibeStream');
 
   const bus = new EventBus();
   const panelManager = new PanelManager(context.extensionUri);
+
+  // Status bar (shared by master + slave)
+  const statusBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    100
+  );
+  statusBarItem.command = 'vibeStream.toggle';
+  updateStatusBar(statusBarItem, false);
+  statusBarItem.show();
+  context.subscriptions.push(statusBarItem);
 
   // ═══ Live Sync — detect master/slave role ═══
   const syncRole = detectRole();
@@ -115,19 +124,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // ═══ From here on: MASTER mode only ═══
 
-  // Status bar
-  const statusBarItem = vscode.window.createStatusBarItem(
-    vscode.StatusBarAlignment.Right,
-    100
-  );
-  statusBarItem.command = 'vibeStream.toggle';
-  updateStatusBar(statusBarItem, false);
-  statusBarItem.show();
-  context.subscriptions.push(statusBarItem);
-
   // Achievement tracker
   const achievementTracker = new AchievementTracker();
   let sessionMessagesTyped = 0;
+  const sessionStartTime = Date.now();
 
   // Periodic achievement check — every 60 seconds
   const achievementTimer = setInterval(() => {
@@ -135,7 +135,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const newAchievements = achievementTracker.check({
       totalXP: profile.xp,
       level: profile.level,
-      sessionMinutes: Math.floor((Date.now() - Date.now()) / 60_000), // gets overwritten below
+      sessionMinutes: Math.floor((Date.now() - sessionStartTime) / 60_000),
       sessionXP: 0,
       totalSessions: profile.totalSessions,
       totalCommits: profile.totalCommits,
@@ -297,7 +297,6 @@ export function activate(context: vscode.ExtensionContext): void {
     } else if (!streamChat.isActive()) {
       streamChatDisposable = streamChat.start();
       startEngines();
-      streamActive = true;
       updateStatusBar(statusBarItem, true);
     }
   };
@@ -313,7 +312,6 @@ export function activate(context: vscode.ExtensionContext): void {
       streamChat.setConfig(savedStreamerName, lang, style);
       streamChatDisposable = streamChat.start();
       startEngines();
-      streamActive = true;
       updateStatusBar(statusBarItem, true);
       panelManager.setStreamMode(true);
     } else {
@@ -443,7 +441,6 @@ export function activate(context: vscode.ExtensionContext): void {
       if (streamChat.isActive()) {
         streamChatDisposable?.dispose();
         streamChatDisposable = undefined;
-        streamActive = false;
         updateStatusBar(statusBarItem, false);
         panelManager.setStreamMode(false);
         vscode.window.showInformationMessage('VibeStream — stream stopped.');
@@ -462,7 +459,6 @@ export function activate(context: vscode.ExtensionContext): void {
         streamChat.setConfig(name, lang, style);
         streamChatDisposable = streamChat.start();
         startEngines();
-        streamActive = true;
         updateStatusBar(statusBarItem, true);
         panelManager.setStreamMode(true);
         vscode.window.showInformationMessage('VibeStream — your viewers are watching!');

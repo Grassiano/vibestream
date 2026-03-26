@@ -116,18 +116,6 @@ export class PanelManager implements vscode.WebviewViewProvider {
     });
   }
 
-  sendXpUpdate(data: { xp: number; level: number; title: string; percent: number; combo: number; comboMultiplier: number; totalXp: number }): void {
-    this.view?.webview.postMessage({ type: 'xp-update', payload: data });
-  }
-
-  sendXpPopup(xp: number, combo: number): void {
-    this.view?.webview.postMessage({ type: 'xp-popup', payload: { xp, combo } });
-  }
-
-  sendLevelUp(level: number, title: string): void {
-    this.view?.webview.postMessage({ type: 'level-up', payload: { level, title } });
-  }
-
   sendComboUpdate(combo: number, multiplier: number): void {
     this.view?.webview.postMessage({ type: 'combo-update', payload: { combo, multiplier } });
   }
