@@ -4,6 +4,7 @@ export class PanelManager implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | null = null;
   private streamMode = false;
   private lastViewerCount = 5;
+  private lastXPState: { level: number; title: string; percent: number; streak: number } | null = null;
   onStreamerChat: ((text: string) => void) | undefined;
   onStreamSetup: ((config: { name: string; lang: string; style: string }) => void) | undefined;
   onViewerProfileClick: ((name: string) => void) | undefined;
@@ -26,10 +27,10 @@ export class PanelManager implements vscode.WebviewViewProvider {
 
     webviewView.webview.onDidReceiveMessage((message) => {
       if (message.type === 'ready') {
+        this.sendAlertUris(webviewView.webview);
+        const cfg = vscode.workspace.getConfiguration('vibeStream');
+        const hasName = !!cfg.get<string>('streamerName', '');
         if (this.streamMode) {
-          // Check if setup was completed (has a saved name)
-          const cfg = vscode.workspace.getConfiguration('vibeStream');
-          const hasName = !!cfg.get<string>('streamerName', '');
           this.view?.webview.postMessage({
             type: 'stream-mode',
             payload: { enabled: true, needsSetup: !hasName },
@@ -38,6 +39,16 @@ export class PanelManager implements vscode.WebviewViewProvider {
             type: 'viewer-count',
             payload: { count: this.lastViewerCount },
           });
+        } else {
+          // Not yet enabled — show setup screen so user can configure
+          this.view?.webview.postMessage({
+            type: 'stream-mode',
+            payload: { enabled: true, needsSetup: true },
+          });
+        }
+        // Always send cached XP state on ready
+        if (this.lastXPState) {
+          this.view?.webview.postMessage({ type: 'xp-state', payload: this.lastXPState });
         }
       }
       if (message.type === 'streamer-chat' && message.text) {
@@ -105,6 +116,63 @@ export class PanelManager implements vscode.WebviewViewProvider {
     });
   }
 
+  sendXpUpdate(data: { xp: number; level: number; title: string; percent: number; combo: number; comboMultiplier: number; totalXp: number }): void {
+    this.view?.webview.postMessage({ type: 'xp-update', payload: data });
+  }
+
+  sendXpPopup(xp: number, combo: number): void {
+    this.view?.webview.postMessage({ type: 'xp-popup', payload: { xp, combo } });
+  }
+
+  sendLevelUp(level: number, title: string): void {
+    this.view?.webview.postMessage({ type: 'level-up', payload: { level, title } });
+  }
+
+  sendComboUpdate(combo: number, multiplier: number): void {
+    this.view?.webview.postMessage({ type: 'combo-update', payload: { combo, multiplier } });
+  }
+
+  sendComboDrop(): void {
+    this.view?.webview.postMessage({ type: 'combo-drop' });
+  }
+
+  sendHype(level: number): void {
+    this.view?.webview.postMessage({ type: 'hype-level', payload: { level } });
+  }
+
+  sendXPGain(amount: number, level: number, title: string, percent: number): void {
+    this.view?.webview.postMessage({
+      type: 'xp-gain',
+      payload: { amount, level, title, percent },
+    });
+  }
+
+  sendXPState(level: number, title: string, percent: number, streak: number): void {
+    this.lastXPState = { level, title, percent, streak };
+    this.view?.webview.postMessage({
+      type: 'xp-state',
+      payload: { level, title, percent, streak },
+    });
+  }
+
+  sendAlert(alertType: string, data: Record<string, unknown>): void {
+    this.view?.webview.postMessage({
+      type: 'alert',
+      payload: { alertType, ...data },
+    });
+  }
+
+  private sendAlertUris(webview: vscode.Webview): void {
+    const alerts: Record<string, string> = {};
+    for (const name of ['level-up', 'milestone', 'combo']) {
+      const uri = webview.asWebviewUri(
+        vscode.Uri.joinPath(this.extensionUri, 'media', 'alerts', `${name}.png`)
+      );
+      alerts[name] = uri.toString();
+    }
+    this.view?.webview.postMessage({ type: 'alert-uris', payload: alerts });
+  }
+
   setStreamMode(enabled: boolean, needsSetup = false): void {
     this.streamMode = enabled;
     this.view?.webview.postMessage({
@@ -122,6 +190,9 @@ export class PanelManager implements vscode.WebviewViewProvider {
       vscode.Uri.joinPath(this.extensionUri, 'out', 'webview.js')
     );
     const nonce = getNonce();
+    const alertLevelUp = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'alerts', 'level-up.png'));
+    const alertMilestone = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'alerts', 'milestone.png'));
+    const alertCombo = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'alerts', 'combo.png'));
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -237,9 +308,12 @@ export class PanelManager implements vscode.WebviewViewProvider {
       padding: 8px 12px;
       display: flex;
       flex-direction: column;
-      justify-content: flex-end;
       gap: 2px;
-      scrollbar-width: none;
+      scrollbar-width: thin;
+    }
+    #chat-messages::before {
+      content: '';
+      flex: 1;
     }
     #chat-messages::-webkit-scrollbar {
       width: 4px;
@@ -409,6 +483,157 @@ export class PanelManager implements vscode.WebviewViewProvider {
     #chat-send-btn:active {
       background: #5c16c5;
     }
+    /* ── XP Bar ── */
+    #xp-bar-container {
+      display: flex;
+      align-items: center;
+      padding: 6px 12px;
+      background: #18181b;
+      border-top: 1px solid #2f2f35;
+      gap: 8px;
+      font-size: 11px;
+      color: #adadb8;
+      flex-shrink: 0;
+    }
+    #xp-level-badge {
+      background: linear-gradient(135deg, #9146ff, #6366f1);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 800;
+      padding: 2px 6px;
+      border-radius: 4px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    #xp-bar-track {
+      flex: 1;
+      height: 6px;
+      background: #2f2f35;
+      border-radius: 3px;
+      overflow: hidden;
+      position: relative;
+    }
+    #xp-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #9146ff, #a855f7, #c084fc);
+      border-radius: 3px;
+      transition: width 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    #xp-bar-fill.level-up {
+      background: linear-gradient(90deg, #ffd700, #ffaa00, #ffd700);
+      animation: xp-flash 0.6s ease 2;
+    }
+    @keyframes xp-flash {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    #xp-label {
+      font-size: 10px;
+      color: #71717a;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    #combo-badge {
+      display: none;
+      font-size: 10px;
+      font-weight: 800;
+      color: #fbbf24;
+      white-space: nowrap;
+      flex-shrink: 0;
+      animation: combo-pulse 0.5s ease;
+    }
+    #combo-badge.active { display: inline; }
+    @keyframes combo-pulse {
+      0% { transform: scale(1.5); }
+      100% { transform: scale(1); }
+    }
+    /* ── Floating XP popup ── */
+    .xp-popup {
+      position: absolute;
+      right: 12px;
+      font-size: 13px;
+      font-weight: 800;
+      color: #a855f7;
+      pointer-events: none;
+      animation: xp-float 1.5s ease-out forwards;
+      z-index: 35;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+    }
+    .xp-popup.big {
+      font-size: 16px;
+      color: #fbbf24;
+    }
+    .xp-popup.huge {
+      font-size: 20px;
+      color: #ffd700;
+      text-shadow: 0 0 10px rgba(255,215,0,0.5);
+    }
+    @keyframes xp-float {
+      0% { opacity: 1; transform: translateY(0) scale(1.2); }
+      30% { opacity: 1; transform: translateY(-20px) scale(1); }
+      100% { opacity: 0; transform: translateY(-60px) scale(0.8); }
+    }
+    /* ── Alert Overlay ── */
+    #alert-overlay {
+      display: none;
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      z-index: 55;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      background: rgba(0,0,0,0.4);
+    }
+    #alert-overlay.active {
+      display: flex;
+      animation: alert-bg-in 0.3s ease;
+    }
+    @keyframes alert-bg-in {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    #alert-container {
+      position: relative;
+      width: 90%;
+      max-width: 320px;
+    }
+    #alert-image {
+      width: 100%;
+      height: auto;
+      border-radius: 8px;
+      animation: alert-slam 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    @keyframes alert-slam {
+      0% { opacity: 0; transform: scale(0.2) rotate(-5deg); }
+      50% { opacity: 1; transform: scale(1.08) rotate(1deg); }
+      75% { transform: scale(0.97) rotate(-0.5deg); }
+      100% { transform: scale(1) rotate(0deg); }
+    }
+    #alert-subtitle {
+      position: absolute;
+      bottom: 22%;
+      left: 50%;
+      transform: translateX(-50%);
+      text-align: center;
+      font-size: 22px;
+      font-weight: 900;
+      color: #fff;
+      text-shadow: 0 0 12px rgba(145,70,255,0.8), 0 0 24px rgba(145,70,255,0.4), 0 2px 4px rgba(0,0,0,0.9);
+      letter-spacing: 1px;
+      white-space: nowrap;
+      animation: alert-subtitle-in 0.5s ease 0.3s both;
+    }
+    @keyframes alert-subtitle-in {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    #alert-overlay.fade-out {
+      animation: alert-fade-out 0.5s ease forwards;
+    }
+    @keyframes alert-fade-out {
+      to { opacity: 0; }
+    }
     /* ── Profile card overlay ── */
     #profile-overlay {
       display: none;
@@ -491,6 +716,11 @@ export class PanelManager implements vscode.WebviewViewProvider {
       color: #adadb8;
       margin-bottom: 8px;
     }
+    .profile-languages {
+      font-size: 11px;
+      color: #adadb8;
+      margin-bottom: 6px;
+    }
     .profile-bio {
       font-size: 12px;
       color: #d4d4d8;
@@ -509,6 +739,55 @@ export class PanelManager implements vscode.WebviewViewProvider {
       font-size: 14px;
       font-weight: 700;
       color: #efeff1;
+    }
+    /* ── XP info/track/fill (new layout elements) ── */
+    #xp-info {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+      font-size: 10px;
+    }
+    #xp-level {
+      color: #efeff1;
+      font-weight: 700;
+      font-size: 11px;
+    }
+    #xp-combo {
+      color: #fbbf24;
+      font-weight: 800;
+      font-size: 11px;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    #xp-combo.active {
+      opacity: 1;
+      animation: combo-pulse 0.5s ease;
+    }
+    #xp-track {
+      height: 4px;
+      background: #2f2f35;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    #xp-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #9146ff, #ff75e6);
+      border-radius: 2px;
+      transition: width 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    #xp-fill.level-up {
+      background: linear-gradient(90deg, #ffd700, #ff8c00);
+      animation: xp-flash 0.6s ease 3;
+    }
+    /* ── XP Floating Popups container ── */
+    #xp-popups {
+      position: absolute;
+      right: 12px;
+      bottom: 60px;
+      pointer-events: none;
+      z-index: 35;
     }
     /* ── Settings button ── */
     #settings-btn {
@@ -698,6 +977,7 @@ export class PanelManager implements vscode.WebviewViewProvider {
           <span id="profile-age"></span>
           <span id="profile-location"></span>
         </div>
+        <div class="profile-languages" id="profile-languages"></div>
         <div class="profile-bio" id="profile-bio"></div>
         <div class="profile-stats">
           <div><div class="profile-stat-val" id="profile-watch"></div>min watched</div>
@@ -721,7 +1001,20 @@ export class PanelManager implements vscode.WebviewViewProvider {
         <input id="chat-input" type="text" placeholder="Send a message" maxlength="120" autocomplete="off" />
         <button id="chat-send-btn">Chat</button>
       </div>
+      <div id="xp-bar-container">
+        <span id="xp-level-badge">Lv.1</span>
+        <div id="xp-bar-track"><div id="xp-bar-fill"></div></div>
+        <span id="combo-badge"></span>
+        <span id="xp-label">0 XP</span>
+      </div>
     </div>
+    <div id="alert-overlay" data-level-up="${alertLevelUp}" data-milestone="${alertMilestone}" data-combo="${alertCombo}">
+      <div id="alert-container">
+        <img id="alert-image" src="" alt="" />
+        <div id="alert-subtitle"></div>
+      </div>
+    </div>
+    <div id="xp-popups"></div>
   </div>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>

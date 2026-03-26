@@ -23,8 +23,8 @@ function streamLog(entry: Record<string, unknown>): void {
   }
 }
 
-const GEMINI_MODEL = 'gemini-2.0-flash';
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+// Backend handles Gemini — extension sends prompts to our API
+const DEFAULT_BACKEND_URL = 'https://backend-production-6558.up.railway.app';
 
 const TIMEOUT_MS = 4_000;
 
@@ -89,7 +89,8 @@ const VIEWER_COLORS = [
 ];
 
 export class StreamChatManager {
-  private apiKey: string | undefined;
+  private backendUrl: string = DEFAULT_BACKEND_URL;
+  private licenseKey = '';
   private eventBuffer: StreamEvent[] = [];
   private batchTimer: NodeJS.Timeout | undefined;
   private decayTimer: NodeJS.Timeout | undefined;
@@ -107,6 +108,8 @@ export class StreamChatManager {
   private usedTexts = new Set<string>();
   private chatHistory: string[] = [];
   private readonly MAX_HISTORY = 40;
+  // Per-viewer message memory — prevents repetition
+  private viewerMemory: Map<string, string[]> = new Map();
   private improvements: Improvements | null = null;
   // Claude conversation context
   private recentPrompts: string[] = [];
@@ -125,8 +128,9 @@ export class StreamChatManager {
   private chatLang = 'he';
   private chatStyle = 'hype';
 
-  setApiKey(key: string | undefined): void {
-    this.apiKey = key;
+  setBackend(url: string, licenseKey: string): void {
+    this.backendUrl = url || DEFAULT_BACKEND_URL;
+    this.licenseKey = licenseKey;
   }
 
   setConfig(name: string, lang: string, style: string): void {
@@ -228,13 +232,52 @@ export class StreamChatManager {
       }
     }, VIEWER_DECAY_INTERVAL_MS);
 
-    // Idle chatter — random messages even when nothing happens
+    // Idle chatter — adapts to how long the streamer is idle
+    let sentAfkMessage = false;
+    let sentDeepAfkMessage = false;
     this.idleChatTimer = setInterval(() => {
       const idleSeconds = (Date.now() - this.lastActivityTime) / 1000;
-      if (idleSeconds > 10 && Math.random() < 0.7) {
+
+      if (idleSeconds > 1800 && !sentDeepAfkMessage) {
+        // 30+ min idle — almost dead chat
+        sentDeepAfkMessage = true;
+        const viewer = pickRandom(this.sessionRoster, 1)[0];
+        if (viewer) {
+          this.onChat?.([{ viewer: viewer.name, color: viewer.color, text: this.chatLang === 'he' ? 'הוא עדיין פה? כבר חצי שעה...' : 'is he still here? its been 30 min...' }], this.viewerCount);
+        }
+      } else if (idleSeconds > 300 && !sentAfkMessage) {
+        // 5+ min idle — AFK noticed
+        sentAfkMessage = true;
+        const viewers = pickRandom(this.sessionRoster, 2);
+        const msgs = viewers.map(v => ({
+          viewer: v.name, color: v.color,
+          text: this.chatLang === 'he'
+            ? ['הלך לשירותים?', 'AFK?', 'יצא לסיגריה?', 'מישהו פה?', 'נראה שהלך...'][Math.floor(Math.random() * 5)]
+            : ['bathroom break?', 'AFK?', 'did he leave?', 'anyone here?', 'he dipped...'][Math.floor(Math.random() * 5)],
+        }));
+        this.onChat?.(msgs, this.viewerCount);
+      } else if (idleSeconds > 60 && Math.random() < 0.3) {
+        // 1+ min — occasional idle chat
+        this.sendIdleChat();
+      } else if (idleSeconds > 10 && idleSeconds <= 60 && Math.random() < 0.5) {
         this.sendIdleChat();
       } else if (idleSeconds <= 10 && Math.random() < 0.3) {
         this.sendIdleChat();
+      }
+
+      // Reset AFK flags when activity resumes
+      if (idleSeconds < 5 && (sentAfkMessage || sentDeepAfkMessage)) {
+        sentAfkMessage = false;
+        sentDeepAfkMessage = false;
+        // Welcome back burst
+        const viewers = pickRandom(this.sessionRoster, 3);
+        const msgs = viewers.map(v => ({
+          viewer: v.name, color: v.color,
+          text: this.chatLang === 'he'
+            ? ['חזר!', 'הוא חזרררר!', 'WELCOME BACK', 'סוף סוף!', 'יאללה חזר לעבודה!'][Math.floor(Math.random() * 5)]
+            : ['HE\'S BACK', 'WELCOME BACK', 'finally!', 'lets gooo he\'s back', 'missed you king'][Math.floor(Math.random() * 5)],
+        }));
+        this.onChat?.(msgs, this.viewerCount);
       }
     }, IDLE_CHAT_INTERVAL_MS);
 
@@ -286,6 +329,19 @@ export class StreamChatManager {
     this.logChat('SYSTEM', `🤖 Claude ענה: ${sizeDesc} (${length} תווים${codeDesc}${fileDesc})`);
 
     streamLog({ type: 'claude-response', length, codeBlocks, files, summary: summary.slice(0, 100) });
+
+    // Push to event buffer — this is the main content for vibe coders
+    if (length > 0) {
+      const fileStr = files.length > 0 ? ` (files: ${files.slice(0, 3).join(', ')})` : '';
+      const isHype = codeBlocks >= 3 || length > 5000 || files.length >= 3;
+      this.eventBuffer.push({
+        type: 'claude-response',
+        detail: `Claude responded: ${codeBlocks} code blocks, ${length} chars${fileStr}`,
+        timestamp: Date.now(),
+        hype: isHype,
+      });
+      this.lastActivityTime = Date.now();
+    }
   }
 
   /** Feed Claude conversation context from the extension */
@@ -300,10 +356,19 @@ export class StreamChatManager {
 
     // Also log to chat history with clear label
     this.logChat('SYSTEM', `📡 שלח פרומפט ל-Claude: "${topic}" (${intent})`);
+
+    // Push to event buffer so LLM batches actually fire for vibe coders
+    this.eventBuffer.push({
+      type: 'convo-user-prompted',
+      detail: topic ? `Talking to AI about: ${topic}` : `Prompting AI: "${prompt.slice(0, 80)}"`,
+      timestamp: Date.now(),
+      hype: false,
+    });
+    this.lastActivityTime = Date.now();
   }
 
   async reactToStreamerMessage(text: string): Promise<void> {
-    if (!this.apiKey || !this.active) return;
+    if (!this.backendUrl || !this.active) return;
 
     // Track in conversation thread
     this.logChat('STREAMER', text);
@@ -358,29 +423,38 @@ export class StreamChatManager {
     const personaDesc = describeSessionViewers(this.sessionRoster);
     const fullHistory = this.chatHistory.join('\n');
 
-    const prompt = `הסטרימר כתב הודעה ישירות בצ'אט הסטרים שלו (לא פרומפט ל-Claude — הודעה לצופים!). הצ'אט צריך להתפוצץ.
+    // Check if streamer addressed a specific viewer
+    const mentionMatch = text.match(/@(\S+)/);
+    const mentionedViewer = mentionMatch ? mentionMatch[1] : null;
+    const mentionRule = mentionedViewer
+      ? `\nCRITICAL: Streamer directly addressed @${mentionedViewer}. This viewer MUST be the FIRST to respond, and their response must be a DIRECT reply to what the streamer said to them. Not "omg he talked to me" — an actual answer/reaction. Other viewers can react to the interaction ("lol ${mentionedViewer} got called out", etc).`
+      : '';
+
+    const prompt = `The STREAMER just typed in chat. The star is talking.
 
 ${personaDesc}
 
-היסטוריית הצ'אט המלאה (שים לב לתיוגים — 🎙️ = הודעת סטרימר, 📡 = פרומפט ל-Claude, @ = צופה):
-${fullHistory}
+Chat history (everyone can see this):
+${this.chatHistory.slice(-10).join('\n')}
 
-🎙️ הסטרימר כתב עכשיו בצ'אט (מדבר ישירות לצופים!): "${text.slice(0, 200)}"
+STREAMER SAID: "${text.slice(0, 200)}"
+${mentionRule}
 
-צור 5-6 תגובות. הסטרימר הוא הכוכב — כשהוא מדבר, כולם מגיבים. חוקים:
-- כל הדמויות חייבות להגיב לתוכן של מה שהסטרימר אמר — לא תגובות גנריות
-- אם הסטרימר שאל שאלה — לפחות 3 צופים עונים (תשובות שונות, חלקם חולקים)
-- אם הסטרימר אמר משהו מצחיק — אחד צוחק, אחד מעתיק, אחד ממשיך את הבדיחה
-- אם הסטרימר ענה על שאלה של צופה — אותו צופה חייב להגיב
-- אם הסטרימר הודה לצ'אט — גל חום: "np", "אחי", "love u", "peepoHappy"
-- צופים בשפה מקומית כותבים רק בשפה שלהם, בלי ערבוב
-- צופים מגיבים אחד לשני גם: "@Kappa_Andy shut up"
-- אל תחזור על תגובות שכבר נאמרו
-- מקסימום 60 תווים, חלק מההודעות קצרות מאוד (מילה אחת)
-- תערבב הודעות ארוכות (30-60 תווים) עם קצרות (3-15 תווים)
+Generate 5-6 viewer reactions. Rules:
+- Respond to what the streamer ACTUALLY SAID. Not generic hype.
+- If streamer asked a question — viewers answer (different answers, some wrong, some funny)
+- If streamer was funny — someone laughs, someone continues the joke, someone misses it
+- If streamer addressed @someone — that person replies FIRST with a real answer
+- NEVER say "he said X" — everyone can see the chat. Just react.
+- NEVER narrate ("the streamer is talking to us") — just be a person responding naturally
+- Not everyone has to react to the streamer. 1-2 viewers can talk to each other about what was said.
+- Some reactions are late — responding to something from 3-4 messages ago
+- 1-8 words per message. Twitch speed.
+- Each viewer writes ONLY in their language
+- Be messy, chaotic, real. Some typos OK.
 
-פורמט:
-@ViewerName: הודעה`;
+Format:
+@ViewerName: message`;
 
     streamLog({ type: 'streamer-prompt', streamerMsg: text.slice(0, 200), viewers: this.viewerCount });
 
@@ -414,6 +488,14 @@ ${fullHistory}
     this.chatHistory.push(`${prefix}: ${text}`);
     if (this.chatHistory.length > this.MAX_HISTORY) {
       this.chatHistory.shift();
+    }
+
+    // Per-viewer memory — track last 5 messages per viewer
+    if (speaker !== 'STREAMER' && speaker !== 'SYSTEM') {
+      const history = this.viewerMemory.get(speaker) ?? [];
+      history.push(text);
+      if (history.length > 5) history.shift();
+      this.viewerMemory.set(speaker, history);
     }
   }
 
@@ -587,7 +669,7 @@ ${fullHistory}
   // ═══════════════════════════════════════════════════════════
 
   private async flushBatch(): Promise<void> {
-    if (!this.apiKey || this.eventBuffer.length === 0) return;
+    if (!this.backendUrl || this.eventBuffer.length === 0) return;
 
     const events = this.dedupeEvents(this.eventBuffer);
     const hasHype = this.eventBuffer.some(e => e.hype);
@@ -698,61 +780,129 @@ ${fullHistory}
       }
     }
 
-    return `אתה קבוצה של צופים שצופים ב-vibe coder דרך ה-IDE שלו.
+    return `You generate messages for a simulated Twitch-style chat. Viewers are watching a developer code live.
 
-חשוב! יש 3 ערוצים שונים — אל תערבב ביניהם:
-1. 🎙️ STREAMER (בצ'אט הסטרים) = הודעות שהסטרימר כותב ישירות לכם, לצופים. הגיבו לו!
-2. 📡 CLAUDE PROMPT = פרומפטים שהסטרימר שולח ל-Claude Code (כלי AI לקוד). זה לא מופנה אליכם — זה עבודה. הגיבו על זה כצופים ("הוא ביקש מהבינה לעשות X")
-3. @ (צופה) = הודעות של צופים אחרים בצ'אט. תגיבו אחד לשני.
-
-מה מעניין:
-- מה הוא מבקש מ-Claude (הפרומפטים — זה התוכן האמיתי)
-- כמה עמוק הוא בשיחה עם Claude
-- האם הוא מסתבך עם Claude
-- כשהוא כותב לכם בצ'אט — זה הרגע הכי חשוב, כולם מגיבים
-
-${isHype ? '🔥 רגע דרמטי!' : ''}
+${isHype ? '🔥 HYPE MOMENT — max energy!' : ''}
 
 ${personaDesc}
+
+═══ WHAT'S HAPPENING ═══
 ${claudeSection}
+${this.lastClaudeResponse ? `Claude responded: ${this.lastClaudeResponseLength} chars, ${this.lastClaudeCodeBlocks} code blocks${this.lastClaudeFilesModified.length > 0 ? `, files: ${this.lastClaudeFilesModified.join(', ')}` : ''}` : ''}
+File: ${fileName} (${language}, ${lineCount} lines)
+${codeContext ? `Code on screen:\n${codeContext}` : ''}
+Events: ${eventList}
+Session: ${sessionMinutes} min | ${this.totalKeystrokes} keystrokes | ${this.totalSaves} saves | ${this.totalErrors} errors
 
-${this.lastClaudeResponse ? `🤖 תשובת Claude האחרונה: "${this.lastClaudeResponse.slice(0, 100)}..." (${this.lastClaudeResponseLength} תווים, ${this.lastClaudeCodeBlocks} בלוקי קוד${this.lastClaudeFilesModified.length > 0 ? `, שינה: ${this.lastClaudeFilesModified.join(', ')}` : ''})` : ''}
+═══ CHAT HISTORY (everyone can see this — DO NOT repeat or summarize it) ═══
+${this.chatHistory.length > 0 ? this.chatHistory.slice(-12).join('\n') : '(empty)'}
 
-מה על המסך:
-קובץ: ${fileName} (${language}, ${lineCount} שורות)
-${codeContext ? `קוד:\n${codeContext}` : ''}
+═══ RULES ═══
 
-אירועים:
-${eventList}
+LOGIC & REALISM:
+- The session is ${sessionMinutes} minutes old. Viewers know this. Nobody says "I've been watching for hours" after 2 minutes.
+- React to what ACTUALLY happened in the events above. If nothing interesting happened, chat is quiet/lazy — NOT dramatic.
+- A normal save is NOT exciting. A commit IS. A push to prod IS. Scale reactions to the actual event.
+- Small event = small reaction (1-2 viewers, short). Big event = big reaction (4+ viewers, energetic).
+- NEVER invent things that don't exist. No "background music", no "cool wallpaper", no "nice setup". Viewers can ONLY see code in an IDE. Nothing else. No camera, no mic, no music, no face. Just code on a screen.
+- NEVER reference anything not listed in the events or chat history above. If it's not there, it didn't happen.
 
-סשן: ${sessionMinutes} דק | ${this.totalKeystrokes} הקשות | ${this.totalSaves} שמירות | ${this.totalErrors} שגיאות
+LANGUAGE — ABSOLUTE RULE:
+- Hebrew-name viewers (אבגדה) write ONLY Hebrew. Not a single English word. Not "wait", not "technically", not "actually". ONLY Hebrew. The ONLY exceptions are universal emotes.
+- English-name viewers write ONLY English.
+- Universal emotes allowed by anyone: PogChamp, KEKW, W, GG, monkaS, F, LOL, RIP
+- ANY other English word from a Hebrew viewer = VIOLATION. "wait מה?" = VIOLATION. "nice אחי" = VIOLATION.
 
-${this.chatHistory.length > 0 ? `היסטוריית הצ'אט המלאה (הכל מה שנכתב עד עכשיו — קרא הכל!):\n${this.chatHistory.join('\n')}` : ''}
+DIRECT INTERACTION:
+- If streamer wrote to @ViewerName in chat history — that viewer MUST reply DIRECTLY. Not "he talked to me!" — an actual response.
+- If a viewer asked a question — someone can answer. Questions don't float forever.
 
-צור ${msgCount} הודעות. חוקים:
-- עדיפות ראשונה: הגיבו על השיחה עם Claude — הפרומפטים, הנושאים, עומק השיחה
-- עדיפות שנייה: הגיבו על מה שקורה ב-IDE — קבצים, שגיאות, שמות ספציפיים
-- לא תגובות גנריות כמו "PogChamp", "W", "LETS GO" — אלה משעממות
-- צופים בשפה מקומית כותבים רק בשפה שלהם, בלי ערבוב
-- כשצופה מגיב לצופה אחר — הוא חייב להגיב באותה שפה שהצופה ההוא כתב. אם @achi_hadev כתב בעברית ו-@Kappa_Andy עונה לו, הוא עונה בעברית (גם אם הוא בדרך כלל כותב באנגלית). אנשים מתאימים את עצמם לשפה של השיחה.
-- טבעי, לא מושלם, קיצורים מותרים
-${this.improvements?.promptRules.length ? `\nכללים נלמדים מסשנים קודמים (חשוב!):\n${this.improvements.promptRules.map(r => `- ${r}`).join('\n')}` : ''}
-${this.improvements?.avoid.length ? `\nלעולם אל תשתמש בביטויים האלה (חזרו יותר מדי):\n${this.improvements.avoid.slice(0, 15).map(a => `- "${a}"`).join('\n')}` : ''}
+NEVER DO:
+- NEVER narrate the IDE. "he saved a file" "he opened extension.ts" — viewers can SEE the screen.
+- NEVER be dramatic about nothing. "החיים שלי לא יהיו אותו דבר" about a normal coding session = ridiculous.
+- NEVER talk about games, food, or random topics UNLESS the chat has been quiet for 5+ minutes.
+- NEVER have every viewer react to the same thing. 2-3 react, others continue their own threads.
+- NEVER repeat what another viewer just said in different words.
 
-פורמט:
-@ViewerName: הודעה`;
+HOW REAL CHAT WORKS:
+- Most messages are 1-4 words. Rarely 5-8. Never more.
+- Some messages are just emotes or reactions.
+- Some respond to other viewers, not the stream.
+- Late reactions to something from 2-3 messages ago are natural.
+- Lurkers say 1 word max. Maybe nothing.
+- Typos, slang, incomplete sentences = good. This is chat, not writing.
+
+${this.improvements?.avoid.length ? `BANNED PHRASES — using ANY of these = immediate failure:\n${this.improvements.avoid.slice(0, 30).map(a => `"${a}"`).join(', ')}` : ''}
+
+═══ VIEWER MEMORY — DO NOT REPEAT ═══
+${this.buildViewerMemory()}
+
+═══ YOUR TASK ═══
+Pick ${msgCount} viewers from the roster above. For EACH viewer, think:
+1. What is this viewer's CHARACTER? (read their DNA)
+2. What did they ALREADY say this session? (check memory above)
+3. What SPECIFICALLY happened in the events that they would react to?
+4. How would THIS CHARACTER react — in THEIR voice, THEIR language, THEIR style?
+
+NOT EVERY VIEWER REACTS. If only 2 things happened, only 2-3 viewers talk. The rest stay silent.
+If nothing exciting happened, generate 1-2 lazy/bored messages max.
+
+QUALITY CHECK before each message:
+- Is this something a REAL person would type in Twitch chat? If not, delete it.
+- Is it in the viewer's language ONLY? Hebrew viewer = zero English words.
+- Is it under 6 words? If longer, shorten it.
+- Does it reference something that ACTUALLY happened? If not, delete it.
+- Did this viewer already say something similar? If yes, delete it.
+
+Format — one per line:
+@ViewerName: message`;
+  }
+
+  private buildViewerMemory(): string {
+    if (this.viewerMemory.size === 0) return '(no messages yet — first batch!)';
+    const lines: string[] = [];
+    for (const [viewer, msgs] of this.viewerMemory) {
+      if (msgs.length > 0) {
+        lines.push(`@${viewer} already said: ${msgs.map(m => `"${m}"`).join(', ')}`);
+      }
+    }
+    return lines.join('\n') || '(no messages yet)';
   }
 
   private parseMessages(raw: string): ChatMessage[] {
     const messages: ChatMessage[] = [];
     const lines = raw.trim().split('\n');
 
+    const batchTexts = new Set<string>(); // dedup within this batch
+
     for (const line of lines) {
       const match = line.match(/^@([^:]+?):\s*(.+)$/);
       if (match) {
         const viewer = match[1];
         const text = match[2].trim();
-        // Use roster color if viewer exists, otherwise hash-based
+        const textLower = text.toLowerCase();
+
+        // DEDUP 1: skip if this exact text already appeared in this batch
+        if (batchTexts.has(textLower)) continue;
+
+        // DEDUP 2: skip if this viewer already said this exact thing this session
+        const memory = this.viewerMemory.get(viewer) ?? [];
+        if (memory.some(m => m.toLowerCase() === textLower)) continue;
+
+        // DEDUP 3: skip single-word reactions if used more than 3x globally this session
+        if (text.split(/\s+/).length <= 1) {
+          const globalCount = Array.from(this.viewerMemory.values())
+            .flat()
+            .filter(m => m.toLowerCase() === textLower)
+            .length;
+          if (globalCount >= 3) continue;
+        }
+
+        // DEDUP 4: skip if text is in the avoid list
+        const avoided = this.improvements?.avoid ?? [];
+        if (avoided.some(a => textLower.includes(a.toLowerCase()))) continue;
+
+        batchTexts.add(textLower);
         const rosterViewer = this.sessionRoster.find(v => v.name === viewer);
         const color = rosterViewer?.color ?? VIEWER_COLORS[this.hashString(viewer) % VIEWER_COLORS.length];
         if (rosterViewer) rosterViewer.stats.messageCount++;
@@ -775,30 +925,28 @@ ${this.improvements?.avoid.length ? `\nלעולם אל תשתמש בביטויי
 
   private callGemini(prompt: string): Promise<string | null> {
     return new Promise((resolve) => {
-      if (!this.apiKey) { resolve(null); return; }
+      if (!this.backendUrl) { resolve(null); return; }
 
       const timer = setTimeout(() => resolve(null), TIMEOUT_MS);
 
       const body = JSON.stringify({
-        contents: [
-          { role: 'user', parts: [{ text: prompt }] },
-        ],
-        generationConfig: {
-          maxOutputTokens: 350,
-          temperature: 1.4,
-        },
+        prompt,
+        max_tokens: 350,
+        temperature: 1.4,
       });
 
-      const url = new URL(`${GEMINI_URL}?key=${this.apiKey}`);
+      const url = new URL(`${this.backendUrl}/api/chat`);
 
       const req = https.request(
         {
           hostname: url.hostname,
-          path: url.pathname + url.search,
+          path: url.pathname,
           method: 'POST',
+          port: url.port || (url.protocol === 'https:' ? 443 : 80),
           headers: {
             'Content-Type': 'application/json',
             'Content-Length': Buffer.byteLength(body),
+            'X-License-Key': this.licenseKey,
           },
         },
         (res) => {
@@ -807,11 +955,8 @@ ${this.improvements?.avoid.length ? `\nלעולם אל תשתמש בביטויי
           res.on('end', () => {
             clearTimeout(timer);
             try {
-              const json = JSON.parse(data) as {
-                candidates?: { content?: { parts?: { text?: string }[] } }[];
-              };
-              const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
-              resolve(text ?? null);
+              const json = JSON.parse(data) as { text?: string | null };
+              resolve(json.text ?? null);
             } catch {
               resolve(null);
             }

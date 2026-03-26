@@ -11,6 +11,98 @@ const streamChatContainer = document.getElementById('stream-chat-container')!;
 const chatMessages = document.getElementById('chat-messages')!;
 const viewerNum = document.getElementById('viewer-num')!;
 
+// XP bar elements
+const xpLevelBadge = document.getElementById('xp-level-badge')!;
+const xpBarFill = document.getElementById('xp-bar-fill')!;
+const xpLabel = document.getElementById('xp-label')!;
+const comboBadge = document.getElementById('combo-badge')!;
+const alertOverlay = document.getElementById('alert-overlay')!;
+const alertImage = document.getElementById('alert-image') as HTMLImageElement;
+const alertSubtitle = document.getElementById('alert-subtitle')!;
+const alertUris: Record<string, string> = {};
+
+function showXpPopup(xp: number, combo: number): void {
+  const el = document.createElement('div');
+  const size = xp >= 100 ? 'huge' : xp >= 50 ? 'big' : '';
+  el.className = `xp-popup ${size}`;
+  const comboText = combo >= 2 ? ` x${combo}` : '';
+  el.textContent = `+${xp} XP${comboText}`;
+  // Random vertical position in chat area
+  el.style.bottom = `${60 + Math.random() * 100}px`;
+  streamChatContainer.appendChild(el);
+  setTimeout(() => el.remove(), 1500);
+}
+
+function showAlert(alertType: string, subtitle?: string): void {
+  const uri = alertUris[alertType];
+  if (!uri) return;
+
+  alertImage.src = uri;
+  alertSubtitle.textContent = subtitle ?? '';
+  alertOverlay.classList.remove('fade-out');
+  alertOverlay.classList.add('active');
+
+  // Play alert sound
+  playAlertSound(alertType);
+
+  // Flash XP bar gold on level up
+  if (alertType === 'level-up') {
+    xpBarFill.classList.add('level-up');
+  }
+
+  // Hold for 3.5 seconds, then fade out
+  setTimeout(() => {
+    alertOverlay.classList.add('fade-out');
+    setTimeout(() => {
+      alertOverlay.classList.remove('active', 'fade-out');
+      xpBarFill.classList.remove('level-up');
+    }, 500);
+  }, 3500);
+}
+
+let _alertCtx: AudioContext | null = null;
+function playAlertSound(alertType: string): void {
+  try {
+    if (!_alertCtx) _alertCtx = new AudioContext();
+    const ctx = _alertCtx;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    if (alertType === 'level-up') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(440, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15);
+      osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.3);
+      gain.gain.setValueAtTime(0.12, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.6);
+    } else if (alertType === 'milestone') {
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(523, ctx.currentTime);
+      osc.frequency.setValueAtTime(659, ctx.currentTime + 0.1);
+      osc.frequency.setValueAtTime(784, ctx.currentTime + 0.2);
+      osc.frequency.setValueAtTime(1047, ctx.currentTime + 0.3);
+      gain.gain.setValueAtTime(0.08, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.5);
+    } else if (alertType === 'combo') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(200, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1600, ctx.currentTime + 0.2);
+      gain.gain.setValueAtTime(0.06, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.3);
+    }
+  } catch {
+    // Audio not available
+  }
+}
+
 const MAX_CHAT_MESSAGES = 50;
 const hypeFill = document.getElementById('hype-fill')!;
 let hypeLevel = 0;
@@ -85,6 +177,62 @@ window.addEventListener('message', (event) => {
       const p = message.payload as ViewerProfilePayload;
       viewerProfileCache.set(p.name, p);
       showProfileCard(p);
+      break;
+    }
+
+    case 'xp-gain': {
+      const { amount, level, title, percent } = message.payload as {
+        amount: number; level: number; title: string; percent: number;
+      };
+      xpLevelBadge.textContent = `⚡ Lv.${level} ${title}`;
+      xpBarFill.style.width = `${percent}%`;
+      xpLabel.textContent = `+${amount} XP`;
+      showXpPopup(amount, 0);
+      break;
+    }
+
+    case 'xp-state': {
+      const { level, title, percent, streak } = message.payload as {
+        level: number; title: string; percent: number; streak: number;
+      };
+      xpLevelBadge.textContent = `⚡ Lv.${level} ${title}${streak > 1 ? ` 🔥${streak}` : ''}`;
+      xpBarFill.style.width = `${percent}%`;
+      break;
+    }
+
+    case 'alert': {
+      const { alertType, level, title, viewers, multiplier } = message.payload as {
+        alertType: string; level?: number; title?: string; viewers?: number; multiplier?: number;
+      };
+      let subtitle = '';
+      if (alertType === 'level-up') subtitle = `Level ${level} — ${title}`;
+      else if (alertType === 'milestone') subtitle = `${viewers?.toLocaleString()} VIEWERS!`;
+      else if (alertType === 'combo') subtitle = `${multiplier}x XP MULTIPLIER`;
+      showAlert(alertType, subtitle);
+      break;
+    }
+
+    case 'alert-uris': {
+      const uris = message.payload as Record<string, string>;
+      Object.assign(alertUris, uris);
+      break;
+    }
+
+    case 'combo-update': {
+      const { combo, multiplier } = message.payload as { combo: number; multiplier: number };
+      comboBadge.textContent = `x${combo} ${multiplier}x`;
+      comboBadge.classList.add('active');
+      break;
+    }
+
+    case 'combo-drop': {
+      comboBadge.classList.remove('active');
+      break;
+    }
+
+    case 'hype-level': {
+      const { level: hype } = message.payload as { level: number };
+      hypeFill.style.width = `${hype}%`;
       break;
     }
 
@@ -221,23 +369,6 @@ chatInput.addEventListener('keydown', (e) => {
 });
 chatSendBtn.addEventListener('click', sendStreamerMessage);
 
-const VIEWER_COLORS_POOL = [
-  '#ff4444', '#ff6b6b', '#e94560', '#ff6b9d', '#ec4899',
-  '#d946ef', '#a855f7', '#8b5cf6', '#7c3aed', '#6366f1',
-  '#60a5fa', '#38bdf8', '#22d3ee', '#06b6d4', '#14b8a6',
-  '#10b981', '#34d399', '#4ade80', '#84cc16', '#facc15',
-  '#fbbf24', '#f59e0b', '#fb923c', '#f97316', '#c084fc',
-];
-
-function hashName(str: string): number {
-  let h = 0;
-  for (let i = 0; i < str.length; i++) {
-    h = ((h << 5) - h) + str.charCodeAt(i);
-    h |= 0;
-  }
-  return h;
-}
-
 // Dynamic badges from viewer profile cache
 const BADGE_CSS_MAP: Record<string, string> = { SUB: 'badge-sub', VIP: 'badge-vip', OG: 'badge-og', MOD: 'badge-mod' };
 
@@ -323,6 +454,7 @@ interface ViewerProfilePayload {
   rank: string;
   badge: string;
   profile: { age: number; location: string; bio: string };
+  languages: string[];
   watchMinutes: number;
   messageCount: number;
   sessionsWatched: number;
@@ -357,6 +489,18 @@ function showProfileCard(p: ViewerProfilePayload): void {
 
   document.getElementById('profile-age')!.textContent = `${p.profile.age}y`;
   document.getElementById('profile-location')!.textContent = p.profile.location;
+
+  const LANG_FLAGS: Record<string, string> = {
+    he: '🇮🇱', en: '🇺🇸', es: '🇪🇸', pt: '🇧🇷', fr: '🇫🇷',
+    de: '🇩🇪', ja: '🇯🇵', ru: '🇷🇺', ar: '🇸🇦',
+  };
+  const LANG_NAMES: Record<string, string> = {
+    he: 'Hebrew', en: 'English', es: 'Spanish', pt: 'Portuguese', fr: 'French',
+    de: 'German', ja: 'Japanese', ru: 'Russian', ar: 'Arabic',
+  };
+  const langDisplay = (p.languages ?? ['en']).map(l => `${LANG_FLAGS[l] ?? ''} ${LANG_NAMES[l] ?? l}`).join(', ');
+  document.getElementById('profile-languages')!.textContent = `🗣️ ${langDisplay}`;
+
   document.getElementById('profile-bio')!.textContent = `"${p.profile.bio}"`;
   document.getElementById('profile-watch')!.textContent = String(p.watchMinutes);
   document.getElementById('profile-sessions')!.textContent = String(p.sessionsWatched);
@@ -395,4 +539,5 @@ chatMessages.addEventListener('click', (e) => {
     }
   }
 });
+
 

@@ -18,6 +18,13 @@ export interface ViewerProfile {
   age: number;
   location: string;
   bio: string;
+  occupation: string;
+}
+
+export interface ViewerDNA {
+  flavor: string;
+  quirks: string[];
+  description: string; // Full character description for LLM
 }
 
 export interface ViewerAgent {
@@ -26,9 +33,11 @@ export interface ViewerAgent {
   color: string;
   personality: BasePersonality;
   lang: string;
+  languages: string[];
   rank: ViewerRank;
   badge: string;
   profile: ViewerProfile;
+  dna: ViewerDNA;
   stats: {
     watchMinutes: number;
     messageCount: number;
@@ -48,7 +57,9 @@ interface SavedViewer {
   color: string;
   personality: BasePersonality;
   lang: string;
+  languages: string[];
   profile: ViewerProfile;
+  dna: ViewerDNA;
   stats: {
     watchMinutes: number;
     messageCount: number;
@@ -125,6 +136,7 @@ function hydrateReactions(viewer: SavedViewer): ViewerAgent {
   const rank = computeRank(viewer.stats.watchMinutes);
   return {
     ...viewer,
+    dna: viewer.dna ?? { flavor: 'unknown', quirks: [], description: `${viewer.personality} viewer` },
     rank,
     badge: RANK_BADGES[rank],
     reactions: source?.reactions ?? {},
@@ -207,58 +219,6 @@ function generateName(lang: string, usedNames: Set<string>): string {
 
 // ═══ Profile Generation ═══
 
-const PROFILE_BIOS: Record<BasePersonality, Record<string, string[]>> = {
-  hype: {
-    en: ['biggest fan in the chat', 'positive vibes only', 'here every stream no cap', 'W collector since day 1', 'if you ship it I hype it'],
-    he: ['הצופה הכי נאמן', 'רק אנרגיה חיובית', 'פה כל סטרים', 'אספן ניצחונות'],
-    es: ['el fan número uno', 'solo buenas vibras', 'siempre presente'],
-    pt: ['maior fã do chat', 'só vibes positivas', 'sempre presente'],
-    fr: ['le plus grand fan', 'bonnes vibes uniquement', 'toujours là'],
-    de: ['größter Fan im Chat', 'nur positive Vibes', 'immer dabei'],
-    ja: ['一番のファン', 'ポジティブだけ', '毎回来てる'],
-    ru: ['самый преданный зритель', 'только позитив', 'каждый стрим тут'],
-    ar: ['أكبر فان في الشات', 'طاقة إيجابية فقط', 'هنا كل بث'],
-  },
-  troll: {
-    en: ['professional backseat dev', 'full time chat comedian', 'i roast because i care', 'trolling is an art form'],
-    he: ['מפתח מושב אחורי', 'קומיקאי צאט במשרה מלאה', 'טרול מלידה', 'אומר את מה שכולם חושבים'],
-    es: ['troll profesional', 'comediante del chat', 'el humor es mi pasión'],
-    pt: ['troll profissional', 'comediante do chat', 'humor é minha vida'],
-    fr: ['troll professionnel', 'comédien du chat', 'humour noir certifié'],
-    de: ['professioneller Troll', 'Chat-Komiker', 'Sarkasmus ist Liebe'],
-    ja: ['プロのトロール', 'チャットコメディアン', '草の達人'],
-    ru: ['профессиональный тролль', 'комик чата', 'сарказм — моя жизнь'],
-    ar: ['تروللر محترف', 'كوميديان الشات', 'الترولل فن'],
-  },
-  noob: {
-    en: ['just started coding last week', 'everything is magic to me', 'watching to learn', 'one day ill be this good'],
-    he: ['רק התחלתי ללמוד', 'הכל כל כך מגניב', 'צופה כדי ללמוד', 'יום אחד אני אהיה ככה'],
-    es: ['empecé a programar la semana pasada', 'todo es magia', 'mirando para aprender'],
-    pt: ['comecei semana passada', 'tudo é mágica', 'assistindo pra aprender'],
-    fr: ['j\'ai commencé la semaine dernière', 'tout est magique', 'je regarde pour apprendre'],
-    de: ['habe letzte Woche angefangen', 'alles ist Magie', 'schaue um zu lernen'],
-    ja: ['先週始めたばかり', '全部すごい', '勉強のために見てる'],
-    ru: ['начал на прошлой неделе', 'всё как магия', 'смотрю чтобы учиться'],
-    ar: ['بديت الأسبوع الماضي', 'كل شي سحر', 'أتفرج عشان أتعلم'],
-  },
-  veteran: {
-    en: ['been watching since the early days', 'OG viewer certified', 'seen every error arc', 'remember when chat had 5 people'],
-    he: ['צופה מהימים הראשונים', 'OG מוסמך', 'ראיתי הכל', 'זוכר כשהיו 5 בצאט'],
-  },
-  critic: {
-    en: ['10 years in the industry', 'code review is my cardio', 'high standards only', 'i see potential here'],
-    he: ['10 שנים בהייטק', 'קוד ריוויו זה הספורט שלי', 'סטנדרטים גבוהים', 'רואה פוטנציאל'],
-  },
-  lurker: {
-    en: ['...', 'mostly watching', 'speaks when necessary'],
-    he: ['...', 'בעיקר צופה', 'מדבר כשצריך'],
-  },
-  spammer: {
-    en: ['W', 'emote energy', 'less words more vibes'],
-    he: ['W', 'רק אנרגיה', 'פחות מילים'],
-  },
-};
-
 const PROFILE_LOCATIONS: Record<string, string[]> = {
   en: ['California', 'New York', 'Texas', 'London', 'Toronto', 'Sydney', 'Berlin', 'Seoul', 'Chicago', 'Miami', 'Portland', 'Austin', 'Seattle', 'Vancouver', 'Dublin', 'Amsterdam', 'Singapore', 'Denver', 'LA', 'Boston'],
   he: ['תל אביב', 'ירושלים', 'חיפה', 'רמת גן', 'הרצליה', 'באר שבע', 'אשדוד', 'ראשון', 'פתח תקווה', 'נתניה', 'רעננה', 'כפר סבא', 'חולון', 'מודיעין', 'אילת'],
@@ -281,6 +241,118 @@ const AGE_RANGES: Record<BasePersonality, [number, number]> = {
   spammer: [15, 22],
 };
 
+// ═══ DNA System — Flavors, Quirks, Character Descriptions ═══
+
+interface FlavorDef {
+  flavor: string;
+  occupation: string;
+  bio: string;
+  desc: string; // Character essence for LLM (English — LLM translates behavior)
+}
+
+const FLAVORS: Record<BasePersonality, FlavorDef[]> = {
+  hype: [
+    { flavor: 'startup_dreamer', occupation: 'wannabe founder', bio: 'building the next big thing (for 3 years)', desc: 'Thinks every project is a billion-dollar startup. Gets unreasonably excited about features. Keeps saying "this could be huge"' },
+    { flavor: 'team_player', occupation: 'junior dev', bio: 'says "we" instead of "he"', desc: 'Always says "we" — "WE shipped it", "WE fixed the bug". Treats the stream like a team sport. Feels personally invested in every win and loss' },
+    { flavor: 'emotional', occupation: 'designer', bio: 'gets emotional about clean code', desc: 'Gets genuinely emotional about code. "im literally crying rn". Beautiful code makes him happy, bugs make him sad. Wears heart on sleeve' },
+    { flavor: 'caps_broken', occupation: 'student', bio: 'CAPS LOCK IS A LIFESTYLE', desc: 'Types EVERYTHING in caps. Pure unfiltered energy. No indoor voice. Every message is an explosion of excitement' },
+    { flavor: 'first_timer', occupation: 'curious teen', bio: 'everything is new and amazing', desc: 'Comments on everything like its the first time seeing it. "wait you can just DO that??" Genuinely amazed by normal coding stuff' },
+    { flavor: 'sports_fan', occupation: 'gamer', bio: 'treats coding like a sport', desc: 'Reacts like watching a football match. Commit = GOAAAL. Error = penalty. Push = championship winning goal. Uses sports metaphors for everything' },
+  ],
+  troll: [
+    { flavor: 'backseat_coder', occupation: 'senior dev (allegedly)', bio: 'always knows better, never codes', desc: 'Always has a better way to do it. "should have used Rust btw". Never actually shows his own code. Armchair expert supreme' },
+    { flavor: 'office_refugee', occupation: 'corporate dev', bio: 'watching at work, boss might catch him', desc: 'Clearly watching during work hours. Paranoid his boss will catch him. "shhh keep it down", "brb boss behind me", types in whispers' },
+    { flavor: 'prophet', occupation: 'QA engineer', bio: 'predicted every bug, trust him', desc: 'Claims he predicted every single bug. "I SAID this would happen". Will "scroll up to prove it" but never can. Deadpan delivery' },
+    { flavor: 'ancient_one', occupation: 'retired dev', bio: 'everything was better before', desc: 'Everything was better in the old days. "back in my day we wrote assembly". Complains about modern tools but keeps watching. Secretly impressed' },
+    { flavor: 'chaos_gremlin', occupation: 'script kiddie', bio: 'wants to watch the world burn', desc: 'Just wants to see things break. "delete node_modules and pray". Suggests the worst possible solutions. Celebrates errors. Pure chaos energy' },
+    { flavor: 'competitor', occupation: 'indie dev', bio: 'also codes, lowkey jealous', desc: 'Also a developer, slightly competitive. "my version handles this better but ok". Humble brags about his own projects. Jealous but wont admit it' },
+  ],
+  noob: [
+    { flavor: 'mind_blown', occupation: 'student', bio: 'cant believe AI coding exists', desc: 'Cannot believe AI can write code. Every Claude interaction blows his mind. "WAIT HE JUST TALKS TO IT??" Uses lots of ?? and !!' },
+    { flavor: 'pretender', occupation: 'bootcamp student', bio: 'pretends to understand everything', desc: 'Nods along and pretends to understand. "yeah yeah obviously, standard practice" then whispers "(what is happening)". Never admits confusion directly' },
+    { flavor: 'question_machine', occupation: 'self-taught beginner', bio: 'asks questions nobody answers', desc: 'Asks basic questions constantly. "whats a git?" "why is it red?" Questions often go unanswered and he asks again. Persistent and innocent' },
+    { flavor: 'wholesome', occupation: 'high school student', bio: 'just happy to be here', desc: 'Doesnt understand anything but having the time of his life. "I have no idea whats happening but this is great". Pure positivity, zero knowledge' },
+    { flavor: 'note_taker', occupation: 'CS freshman', bio: 'treating this stream like a lecture', desc: 'Treats the stream like a university lecture. "wait slow down im writing this down". Asks for the streamer to repeat things. Takes everything very seriously' },
+  ],
+  veteran: [
+    { flavor: 'war_stories', occupation: 'tech lead', bio: 'references past sessions constantly', desc: 'References past streams like war stories. "remember the great database crash of session 12?" Has been here since the beginning and wont let you forget it' },
+    { flavor: 'dad_energy', occupation: 'engineering manager', bio: 'supportive but slightly embarrassing', desc: 'Supportive like a proud dad. "thats my boy!" "so proud of you champ". Slightly embarrassing but genuinely caring. Tells other viewers to be nice' },
+    { flavor: 'silent_judge', occupation: 'principal engineer', bio: 'rarely speaks, but when he does it hits', desc: 'Speaks maybe once every 5 minutes. But when he does, everyone listens. Short devastating observations. "...not bad." or "hmm." Respected by all' },
+    { flavor: 'historian', occupation: 'data analyst', bio: 'keeps track of stream stats', desc: 'Tracks everything. "thats his 47th commit this month". Knows exact stats, session counts, error rates. The unofficial stream statistician' },
+  ],
+  critic: [
+    { flavor: 'pr_reviewer', occupation: 'staff engineer', bio: 'reviews code like its a PR', desc: 'Talks like hes reviewing a pull request. "nit: that prompt could be shorter". Uses code review terminology in casual chat. Professional but funny' },
+    { flavor: 'minimalist', occupation: 'architect', bio: 'less is more, always', desc: 'Everything is too much. Too many words, too many files, too many lines. "just say fix bug". Worships simplicity. Pained by complexity' },
+    { flavor: 'actually_guy', occupation: 'senior dev', bio: 'well actually...', desc: 'Starts every message with "well actually" or "technically". Has to correct everything. Not mean about it but compulsive. "technically thats not a bug its undefined behavior"' },
+  ],
+  lurker: [
+    { flavor: 'ghost', occupation: 'unknown', bio: '...', desc: 'Almost never speaks. When he does its 1-2 words max. "nice" or "hmm" or just an emote. But has been watching for hours. Mysterious presence' },
+    { flavor: 'night_owl', occupation: 'freelancer', bio: 'always watching at 3am', desc: 'Its always the middle of the night wherever he is. "its 4am and im watching someone code, what is my life". Tired energy but cant stop watching' },
+    { flavor: 'shy_one', occupation: 'intern', bio: 'wants to chat but too shy', desc: 'Types messages and deletes them. When he finally speaks its very carefully worded and overly polite. Gets flustered when the streamer responds to him' },
+  ],
+  spammer: [
+    { flavor: 'emote_only', occupation: 'twitch native', bio: 'speaks only in emotes', desc: 'Communicates exclusively through emotes and emote words. PogChamp KEKW monkaS. Never uses actual sentences. Pure emote expression' },
+    { flavor: 'one_word', occupation: 'minimalist zoomer', bio: 'one word per message, always', desc: 'Only says single words. "nice" "based" "W" "cope" "true" "real" "mid". Never more than one word. Its a lifestyle' },
+    { flavor: 'copypasta', occupation: 'chat regular', bio: 'copies whatever was just said', desc: 'Copies the previous viewers message or a variation of it. Starts chains. If someone says "LETS GO" he says "LETS GO". The human echo' },
+  ],
+};
+
+// Quirks — random behavioral traits any viewer can get
+const QUIRK_POOL = [
+  'mentions his side project every few messages ("my project also has this...")',
+  'types on his phone, lots of typos and autocorrect fails',
+  'always disagrees with whoever spoke last, on principle',
+  'brags about his setup ("typing from my ultrawide btw")',
+  'uses old internet slang unironically ("epic win", "for the win", "lulz")',
+  'takes everything the streamer says literally',
+  'replies to everything with a follow-up question',
+  'thinks everything is a reference to something else ("is that a JoJo reference?")',
+  'clearly eating while watching, mentions food randomly',
+  'sends messages in parts, never finishes a thought in one message ("wait..." "nvm" "actually...")',
+  'always arrives late and asks "what did I miss"',
+  'keeps trying to get the streamer to play a game instead of coding',
+  'responds to errors with conspiracy theories about the compiler',
+  'uses way too many emojis in every single message',
+  'quotes movies/shows to describe what is happening on stream',
+  'claims to know the streamer IRL (he doesnt)',
+  'keeps accidentally revealing personal info then deleting it',
+  'narrates what the streamer is doing like a sports commentator',
+];
+
+function pickFlavor(personality: BasePersonality): FlavorDef {
+  const pool = FLAVORS[personality];
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function pickQuirks(count: number): string[] {
+  const shuffled = [...QUIRK_POOL].sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, count);
+}
+
+function generateDNA(personality: BasePersonality, profile: ViewerProfile, lang: string): ViewerDNA {
+  const flavorDef = pickFlavor(personality);
+  const quirks = pickQuirks(Math.random() < 0.6 ? 1 : 2);
+
+  profile.occupation = flavorDef.occupation;
+  profile.bio = flavorDef.bio;
+
+  const langLabel = LANG_NAMES[lang] ?? lang;
+  const quirkLines = quirks.map(q => `Quirk: ${q}`).join('. ');
+
+  const description = `${profile.age}yo ${flavorDef.occupation} from ${profile.location}. ${flavorDef.desc}. ${quirkLines}. Writes in: ${langLabel} only.`;
+
+  return {
+    flavor: flavorDef.flavor,
+    quirks,
+    description,
+  };
+}
+
+const LANG_NAMES: Record<string, string> = {
+  en: 'English', he: 'Hebrew', es: 'Spanish', pt: 'Portuguese',
+  fr: 'French', de: 'German', ja: 'Japanese', ru: 'Russian', ar: 'Arabic',
+};
+
 function generateProfile(personality: BasePersonality, lang: string): ViewerProfile {
   const [minAge, maxAge] = AGE_RANGES[personality];
   const age = minAge + Math.floor(Math.random() * (maxAge - minAge + 1));
@@ -288,16 +360,21 @@ function generateProfile(personality: BasePersonality, lang: string): ViewerProf
   const locations = PROFILE_LOCATIONS[lang] ?? PROFILE_LOCATIONS['en'];
   const location = locations[Math.floor(Math.random() * locations.length)];
 
-  const bios = PROFILE_BIOS[personality]?.[lang] ?? PROFILE_BIOS[personality]?.['en'] ?? ['viewer'];
-  const bio = bios[Math.floor(Math.random() * bios.length)];
-
-  return { age, location, bio };
+  // Bio and occupation will be overwritten by generateDNA()
+  return { age, location, bio: '', occupation: '' };
 }
 
 // ═══ Viewer Generation ═══
 
 function generateId(): string {
   return `v_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
+// Generate languages array — what this viewer speaks
+function generateLanguages(lang: string): string[] {
+  if (lang === 'en') return ['en'];
+  // Most non-English speakers also know some English (70% chance)
+  return Math.random() < 0.7 ? [lang, 'en'] : [lang];
 }
 
 export function generateViewer(
@@ -308,8 +385,10 @@ export function generateViewer(
   const name = generateName(lang, usedNames);
   const color = VIEWER_COLORS[Math.floor(Math.random() * VIEWER_COLORS.length)];
   const profile = generateProfile(personality, lang);
+  const dna = generateDNA(personality, profile, lang);
   const now = new Date().toISOString();
   const source = getPersonaSource(personality, lang);
+  const languages = generateLanguages(lang);
 
   return {
     id: generateId(),
@@ -317,9 +396,11 @@ export function generateViewer(
     color,
     personality,
     lang,
+    languages,
     rank: 'newcomer',
     badge: '',
     profile,
+    dna,
     stats: {
       watchMinutes: 0,
       messageCount: 0,
@@ -440,11 +521,16 @@ export function createSessionRoster(lang: string): SessionResult {
     Math.min(NEW_VIEWERS.max, targetCount - returning.length)
   );
 
-  const newLangs = lang === 'en' ? ['en'] : [lang, lang, 'en'];
+  // Language distribution: ~90% stream language, rare international
+  // 70% = 0 international, 25% = 1, 5% = 2
+  const internationalRoll = Math.random();
+  const internationalCount = internationalRoll < 0.70 ? 0 : internationalRoll < 0.95 ? 1 : 2;
+
   const newViewers: ViewerAgent[] = [];
 
   for (let i = 0; i < newCount; i++) {
-    const viewerLang = newLangs[Math.floor(Math.random() * newLangs.length)];
+    const isInternational = lang !== 'en' && i < internationalCount;
+    const viewerLang = isInternational ? 'en' : lang;
     const personality = weightedRandom();
     newViewers.push(generateViewer(personality, viewerLang, usedNames));
   }
@@ -471,7 +557,9 @@ function toSavedViewer(v: ViewerAgent): SavedViewer {
     color: v.color,
     personality: v.personality,
     lang: v.lang,
+    languages: v.languages,
     profile: v.profile,
+    dna: v.dna,
     stats: v.stats,
   };
 }
@@ -486,25 +574,6 @@ export function persistRoster(roster: ViewerAgent[]): void {
 }
 
 // ═══ LLM Prompt Description ═══
-
-const PERSONALITY_DESC: Record<BasePersonality, string> = {
-  hype:    'Hyper-positive fan. Everything is amazing. Pure energy.',
-  troll:   'Sarcastic troll. Backseat coding. Brutal but funny.',
-  noob:    'Newbie viewer. Asks naive questions. Amazed by everything.',
-  veteran: 'Day-1 viewer. References past streams. Inside jokes.',
-  critic:  'Senior dev. High standards. Constructive feedback.',
-  lurker:  'Silent watcher. Speaks rarely. One-word responses.',
-  spammer: 'Emote spammer. Max 2 words. Pure energy.',
-};
-
-const RANK_DESC: Record<ViewerRank, string> = {
-  newcomer: 'Brand new, first time here',
-  regular:  'Shows up sometimes',
-  fan:      'Loyal viewer, keeps coming back',
-  sub:      'Subscriber — dedicated fan',
-  vip:      'VIP — long-time supporter',
-  og:       'OG — been here from the very start',
-};
 
 const PERSONALITY_EMOJI: Record<BasePersonality, string> = {
   hype:    '🔥',
@@ -521,15 +590,29 @@ export function describeSessionViewers(roster: ViewerAgent[]): string {
     const badge = v.badge ? ` [${v.badge}]` : '';
     const sessions = v.stats.sessionsWatched;
     const returning = sessions > 1
-      ? ` (returning viewer, ${sessions} sessions, ${v.stats.watchMinutes} min watched)`
-      : ' (NEW — first time here!)';
-    return `@${v.name}${badge} — ${PERSONALITY_DESC[v.personality]} ${RANK_DESC[v.rank]}.${returning} Writes in: ${v.lang}`;
+      ? ` (returning, ${sessions} sessions)`
+      : ' (NEW — first time!)';
+    const isInternational = v.lang !== roster[0]?.lang;
+    const intlNote = isInternational ? ' [INTERNATIONAL — does NOT understand stream language. Reacts to code/energy/emotes only.]' : '';
+
+    // Use full DNA description instead of generic personality label
+    return `@${v.name}${badge}${returning} — ${v.dna.description}${intlNote}`;
   });
 
-  return `Viewers in chat — each is a unique living person with their own personality, rank, and history.
-RULE: Each viewer writes ONLY in their language. No mixing. Not even one word.
-New viewers are curious and excited. Returning viewers feel at home and reference past sessions.
-Higher rank viewers (SUB/VIP/OG) are more confident and opinionated.
+  const streamLang = roster[0]?.lang ?? 'en';
+  const streamLangName = LANG_NAMES[streamLang] ?? streamLang;
+
+  return `This is a ${streamLangName}-language stream.
+
+Each viewer below is a unique CHARACTER with their own personality, voice, and quirks. They are NOT code reviewers — they are FANS watching a vibe coding stream. Think Twitch chat energy.
+
+EVERY viewer must feel DIFFERENT from every other viewer. Their DNA describes who they are — follow it closely.
+
+RULES:
+- Each viewer writes ONLY in their language. No mixing.
+- "PogChamp", "KEKW", "W", "GG" are universal emotes — fine in any language.
+- International viewers react to code/energy only, not conversation content.
+- Short messages (1-8 words). This is chat, not a forum.
 
 ${lines.join('\n')}`;
 }
@@ -565,6 +648,7 @@ export interface ViewerProfileData {
   rank: ViewerRank;
   badge: string;
   profile: ViewerProfile;
+  languages: string[];
   watchMinutes: number;
   messageCount: number;
   sessionsWatched: number;
@@ -580,6 +664,7 @@ export function getViewerProfiles(roster: ViewerAgent[]): ViewerProfileData[] {
     rank: v.rank,
     badge: v.badge,
     profile: v.profile,
+    languages: v.languages,
     watchMinutes: v.stats.watchMinutes,
     messageCount: v.stats.messageCount,
     sessionsWatched: v.stats.sessionsWatched,
@@ -591,6 +676,7 @@ export function getViewerProfiles(roster: ViewerAgent[]): ViewerProfileData[] {
 export function generateAnonymousProfile(name: string): ViewerProfileData {
   const personality = weightedRandom();
   const profile = generateProfile(personality, 'en');
+  const dna = generateDNA(personality, profile, 'en');
   return {
     name,
     color: VIEWER_COLORS[Math.abs(hashStr(name)) % VIEWER_COLORS.length],
@@ -599,6 +685,7 @@ export function generateAnonymousProfile(name: string): ViewerProfileData {
     rank: 'newcomer',
     badge: '',
     profile,
+    languages: ['en'],
     watchMinutes: Math.floor(Math.random() * 30),
     messageCount: Math.floor(Math.random() * 50),
     sessionsWatched: 1,

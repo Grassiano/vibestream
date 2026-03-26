@@ -7,7 +7,10 @@ import { registerTaskEvents } from './events/task-events';
 import { PanelManager } from './webview/panel-manager';
 import { ClaudeConversationWatcher } from './events/claude-conversation-watcher';
 import { StreamChatManager } from './stream/stream-chat-manager';
-import { analyzeSession } from './stream/session-analyzer';
+import { SelfImprovementLoop } from './stream/session-analyzer';
+import { ViewerEngine, getSpikeAmount } from './stream/viewer-engine';
+import { XPEngine, getXPForEvent } from './progression/xp-engine';
+import { detectRole, LiveSyncMaster, LiveSyncSlave } from './stream/live-sync';
 
 let streamActive = false;
 
@@ -16,6 +19,99 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const bus = new EventBus();
   const panelManager = new PanelManager(context.extensionUri);
+
+  // ═══ Live Sync — detect master/slave role ═══
+  const syncRole = detectRole();
+  const syncMaster = syncRole === 'master' ? new LiveSyncMaster() : null;
+  let syncSlaveDisposable: vscode.Disposable | undefined;
+
+  // Track current state for master sync writes
+  let currentViewerCount = 0;
+  let currentHypeLevel = 0;
+  let currentXPState = { level: 1, title: 'Prompt Beginner', percent: 0, streak: 0 };
+  let currentCombo = { combo: 0, multiplier: 1, active: false };
+  let pendingAlert: { alertType: string; data: Record<string, unknown> } | null = null;
+  let pendingXPPopup: { amount: number } | null = null;
+
+  function syncWrite(messages: { viewer: string; color: string; text: string }[] = []): void {
+    if (!syncMaster) return;
+    syncMaster.writeState({
+      messages,
+      viewerCount: currentViewerCount,
+      hypeLevel: currentHypeLevel,
+      xp: currentXPState,
+      xpPopup: pendingXPPopup,
+      combo: currentCombo,
+      alert: pendingAlert,
+      streamActive: true,
+    });
+    pendingAlert = null;
+    pendingXPPopup = null;
+  }
+
+  // If slave — just mirror the master's state and skip all engine setup
+  if (syncRole === 'slave') {
+    const slave = new LiveSyncSlave({
+      onMessages: (msgs) => panelManager.sendStreamChat(msgs, currentViewerCount),
+      onViewerCount: (count) => {
+        currentViewerCount = count;
+        panelManager.sendViewerCount(count);
+      },
+      onHype: (level) => {
+        panelManager.sendHype(level);
+      },
+      onXPState: (level, title, percent, streak) => {
+        panelManager.sendXPState(level, title, percent, streak);
+      },
+      onXPPopup: (amount) => {
+        panelManager.sendXPGain(amount, 0, '', 0);
+      },
+      onCombo: (combo, multiplier, active) => {
+        if (active) panelManager.sendComboUpdate(combo, multiplier);
+        else panelManager.sendComboDrop();
+      },
+      onAlert: (alertType, data) => {
+        panelManager.sendAlert(alertType, data);
+      },
+      onStreamEnd: () => {
+        panelManager.setStreamMode(false);
+        updateStatusBar(statusBarItem, false);
+      },
+    });
+
+    // Register webview + status bar for slave
+    context.subscriptions.push(
+      vscode.window.registerWebviewViewProvider('vibeStream.panel', panelManager, {
+        webviewOptions: { retainContextWhenHidden: true },
+      })
+    );
+
+    syncSlaveDisposable = slave.start();
+    panelManager.setStreamMode(true);
+    updateStatusBar(statusBarItem, true);
+    statusBarItem.tooltip = 'VibeStream SLAVE — mirroring master window';
+
+    context.subscriptions.push(new vscode.Disposable(() => {
+      syncSlaveDisposable?.dispose();
+    }));
+
+    // Slave registers minimal commands
+    context.subscriptions.push(
+      vscode.commands.registerCommand('vibeStream.toggle', () => {
+        vscode.commands.executeCommand('workbench.view.extension.vibestream');
+      }),
+      vscode.commands.registerCommand('vibeStream.show', () => {
+        vscode.commands.executeCommand('vibeStream.panel.focus');
+      }),
+      vscode.commands.registerCommand('vibeStream.settings', () => {
+        vscode.window.showInformationMessage('Settings are controlled from the master window.');
+      }),
+    );
+
+    return; // Slave is done — no engines, no chat manager, just mirroring
+  }
+
+  // ═══ From here on: MASTER mode only ═══
 
   // Status bar
   const statusBarItem = vscode.window.createStatusBarItem(
@@ -27,14 +123,65 @@ export function activate(context: vscode.ExtensionContext): void {
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
+  // XP progression engine (must be created before viewerEngine since milestone callback uses it)
+  const xpEngine = new XPEngine({
+    onXPGain: (amount, total, source) => {
+      const progress = xpEngine.getXPProgress();
+      panelManager.sendXPGain(amount, xpEngine.getLevel(), xpEngine.getTitle(), progress.percent);
+      currentXPState = { level: xpEngine.getLevel(), title: xpEngine.getTitle(), percent: progress.percent, streak: xpEngine.getProfile().streakDays };
+      pendingXPPopup = { amount };
+      syncWrite();
+    },
+    onLevelUp: (level, title) => {
+      pendingAlert = { alertType: 'level-up', data: { level, title } };
+      panelManager.sendAlert('level-up', { level, title });
+      const msgs = [{ viewer: 'System', color: '#ffd700', text: `LEVEL UP! Level ${level} — ${title} 🎉` }];
+      panelManager.sendStreamChat(msgs, viewerEngine.getCount());
+      syncWrite(msgs);
+    },
+    onComboUpdate: (combo, multiplier) => {
+      panelManager.sendComboUpdate(combo, multiplier);
+      currentCombo = { combo, multiplier, active: true };
+      if (combo >= 5) {
+        panelManager.sendAlert('combo', { multiplier });
+      }
+    },
+    onComboDrop: () => {
+      panelManager.sendComboDrop();
+    },
+  });
+
+  // Viewer count engine — physics-based viewer count
+  const viewerEngine = new ViewerEngine({
+    onCountUpdate: (count) => {
+      currentViewerCount = count;
+      panelManager.sendViewerCount(count);
+      xpEngine.updatePeakViewers(count);
+      syncWrite(); // Sync viewer count to slave on every tick
+    },
+    onMilestone: (milestone) => {
+      xpEngine.earnXP('milestone');
+      pendingAlert = { alertType: 'milestone', data: { viewers: milestone } };
+      panelManager.sendAlert('milestone', { viewers: milestone });
+      const msgs = [{ viewer: 'System', color: '#ffd700', text: `${milestone} VIEWERS! 🎉` }];
+      panelManager.sendStreamChat(msgs, viewerEngine.getCount());
+      syncWrite(msgs);
+    },
+  });
+
   // Stream chat manager
   const streamChat = new StreamChatManager(bus);
+  const backendUrl = config.get<string>('backendUrl', 'https://backend-production-6558.up.railway.app');
+  const licenseKey = config.get<string>('licenseKey', '');
+  streamChat.setBackend(backendUrl, licenseKey);
 
   streamChat.setOnChat((messages, viewerCount) => {
     panelManager.sendStreamChat(messages, viewerCount);
+    syncWrite(messages);
   });
   streamChat.setOnViewerUpdate((count) => {
-    panelManager.sendViewerCount(count);
+    // Use viewer engine instead of direct count
+    viewerEngine.spike(5);
   });
   streamChat.setOnProfiles((profiles) => {
     panelManager.sendViewerProfiles(profiles);
@@ -57,13 +204,41 @@ export function activate(context: vscode.ExtensionContext): void {
   // Streamer types in chat → LLM reacts to their message
   panelManager.onStreamerChat = (text: string) => {
     streamChat.reactToStreamerMessage(text);
+    viewerEngine.spike(getSpikeAmount('streamer-chat'));
+    viewerEngine.activity();
+    // Sync streamer message to slave windows
+    const streamerName = config.get<string>('streamerName', 'Streamer');
+    syncWrite([{ viewer: streamerName, color: '#ffd700', text }]);
   };
+
+  // Self-improvement loop — analyzes chat quality every 30 min
+  const improvementLoop = new SelfImprovementLoop(backendUrl, licenseKey, config.get<string>('language', 'he'));
+  improvementLoop.setOnImproved(() => {
+    // Stream chat manager will reload improvements on next LLM call automatically
+    // (it calls loadImprovements() in buildPrompt)
+  });
 
   // Setup callback — user completed first-time setup
   let streamChatDisposable: vscode.Disposable | undefined;
+  let viewerEngineDisposable: vscode.Disposable | undefined;
+  let improvementDisposable: vscode.Disposable | undefined;
+
+  function startEngines(): void {
+    viewerEngineDisposable?.dispose();
+    improvementDisposable?.dispose();
+    viewerEngineDisposable = viewerEngine.start();
+    improvementDisposable = improvementLoop.start();
+    // Send initial XP state to webview
+    const progress = xpEngine.getXPProgress();
+    const profile = xpEngine.getProfile();
+    panelManager.sendXPState(xpEngine.getLevel(), xpEngine.getTitle(), progress.percent, profile.streakDays);
+  }
 
   panelManager.onStreamSetup = (setupConfig) => {
     const cfg = vscode.workspace.getConfiguration('vibeStream');
+    const previousLang = cfg.get<string>('language', 'he');
+    const langChanged = previousLang !== setupConfig.lang;
+
     cfg.update('streamerName', setupConfig.name, vscode.ConfigurationTarget.Global);
     cfg.update('language', setupConfig.lang, vscode.ConfigurationTarget.Global);
     cfg.update('chatStyle', setupConfig.style, vscode.ConfigurationTarget.Global);
@@ -71,8 +246,19 @@ export function activate(context: vscode.ExtensionContext): void {
 
     streamChat.setConfig(setupConfig.name, setupConfig.lang, setupConfig.style);
 
-    if (!streamChat.isActive()) {
+    if (langChanged && streamChat.isActive()) {
+      // Language changed — full restart with new viewer roster
+      vscode.window.showInformationMessage(
+        'Language changed — stream restarting with new viewers.'
+      );
+      streamChatDisposable?.dispose();
       streamChatDisposable = streamChat.start();
+      improvementLoop.updateConfig(setupConfig.lang);
+      startEngines();
+      panelManager.setStreamMode(true);
+    } else if (!streamChat.isActive()) {
+      streamChatDisposable = streamChat.start();
+      startEngines();
       streamActive = true;
       updateStatusBar(statusBarItem, true);
     }
@@ -88,6 +274,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const style = config.get<string>('chatStyle', 'hype');
       streamChat.setConfig(savedStreamerName, lang, style);
       streamChatDisposable = streamChat.start();
+      startEngines();
       streamActive = true;
       updateStatusBar(statusBarItem, true);
       panelManager.setStreamMode(true);
@@ -103,6 +290,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     convoWatcher.onPrompt((evt) => {
+      // Earn XP for prompting Claude
+      xpEngine.earnXP('convo-user-prompted');
+      viewerEngine.activity();
+      viewerEngine.spike(getSpikeAmount('convo-user-prompted'));
+
       if (streamChat.isActive()) {
         streamChat.feedClaudeContext(
           evt.lastPrompt,
@@ -123,6 +315,12 @@ export function activate(context: vscode.ExtensionContext): void {
           data.codeBlockCount,
           data.filesModified,
         );
+      }
+      // Earn XP for Claude responses (vibe coding IS coding)
+      if (data.responseLength > 0) {
+        xpEngine.earnXP('claude-response');
+        viewerEngine.activity();
+        viewerEngine.spike(getSpikeAmount('ai-end'));
       }
     })
   );
@@ -162,18 +360,32 @@ export function activate(context: vscode.ExtensionContext): void {
   registerGitEvents(bus, context);
   registerTaskEvents(bus, context);
 
-  // Wire event bus → stream chat (feed coding activity as context)
+  // Wire event bus → viewer engine + XP engine + stream chat
   context.subscriptions.push(
     bus.on((event) => {
-      if (!streamChat.isActive()) return;
+      // Viewer engine — spike viewer count on events
+      const spikeAmount = getSpikeAmount(event.type);
+      if (spikeAmount > 0) {
+        viewerEngine.activity();
+        viewerEngine.spike(spikeAmount);
+      }
 
+      // XP engine — award XP on events
+      if (getXPForEvent(event.type)) {
+        xpEngine.earnXP(event.type);
+      }
+
+      // Stream chat — feed coding context
+      if (!streamChat.isActive()) return;
       if (
         event.type === 'git-commit' ||
         event.type === 'git-push' ||
         event.type === 'build-pass' ||
         event.type === 'build-fail' ||
         event.type === 'error-added' ||
-        event.type === 'all-errors-cleared'
+        event.type === 'all-errors-cleared' ||
+        event.type === 'save' ||
+        event.type === 'error-cleared'
       ) {
         streamChat.feedClaudeContext(
           event.type,
@@ -188,7 +400,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Commands
   context.subscriptions.push(
     vscode.commands.registerCommand('vibeStream.toggle', () => {
-      vscode.commands.executeCommand('workbench.view.extension.vibe-stream');
+      vscode.commands.executeCommand('workbench.view.extension.vibestream');
 
       if (streamChat.isActive()) {
         streamChatDisposable?.dispose();
@@ -211,6 +423,7 @@ export function activate(context: vscode.ExtensionContext): void {
         const style = cfg.get<string>('chatStyle', 'hype');
         streamChat.setConfig(name, lang, style);
         streamChatDisposable = streamChat.start();
+        startEngines();
         streamActive = true;
         updateStatusBar(statusBarItem, true);
         panelManager.setStreamMode(true);
@@ -228,7 +441,10 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('vibeStream.settings', () => {
       vscode.commands.executeCommand('vibeStream.panel.focus');
-      panelManager.sendMessage({ type: 'openSettings' });
+      // Trigger open-settings via the panel's existing handler
+      setTimeout(() => {
+        panelManager.setStreamMode(true, true);
+      }, 200);
     })
   );
 
@@ -236,14 +452,11 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     new vscode.Disposable(() => {
       convoWatcher.dispose();
+      improvementDisposable?.dispose();
       streamChatDisposable?.dispose();
-
-      const backendUrl = vscode.workspace
-        .getConfiguration('vibeStream')
-        .get<string>('backendUrl', '');
-      if (backendUrl && streamChat.isActive()) {
-        analyzeSession(backendUrl).catch(() => { /* silent */ });
-      }
+      viewerEngineDisposable?.dispose();
+      xpEngine.dispose();
+      syncMaster?.dispose();
     })
   );
 }
