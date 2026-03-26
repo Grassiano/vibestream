@@ -140,6 +140,20 @@ export class PanelManager implements vscode.WebviewViewProvider {
     this.view?.webview.postMessage({ type: 'hype-level', payload: { level } });
   }
 
+  sendAchievement(name: string, icon: string, description: string): void {
+    this.view?.webview.postMessage({
+      type: 'achievement',
+      payload: { name, icon, description },
+    });
+  }
+
+  sendSessionRecap(recap: Record<string, unknown>): void {
+    this.view?.webview.postMessage({
+      type: 'session-recap',
+      payload: recap,
+    });
+  }
+
   sendXPGain(amount: number, level: number, title: string, percent: number): void {
     this.view?.webview.postMessage({
       type: 'xp-gain',

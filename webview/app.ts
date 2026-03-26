@@ -61,43 +61,177 @@ function showAlert(alertType: string, subtitle?: string): void {
 }
 
 let _alertCtx: AudioContext | null = null;
+
+function getAlertCtx(): AudioContext {
+  if (!_alertCtx) _alertCtx = new AudioContext();
+  return _alertCtx;
+}
+
 function playAlertSound(alertType: string): void {
   try {
-    if (!_alertCtx) _alertCtx = new AudioContext();
-    const ctx = _alertCtx;
+    const ctx = getAlertCtx();
+    const t = ctx.currentTime;
+
+    if (alertType === 'level-up') {
+      // Rising arpeggio — C5→E5→G5→C6, major chord ascending, shimmer feel
+      const notes = [523.25, 659.25, 783.99, 1046.5]; // C5, E5, G5, C6
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, t);
+        const noteStart = t + i * 0.1;
+        const noteEnd = noteStart + 0.18;
+        gain.gain.setValueAtTime(0, noteStart);
+        gain.gain.linearRampToValueAtTime(0.14, noteStart + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001, noteEnd);
+        osc.start(noteStart);
+        osc.stop(noteEnd + 0.05);
+
+        // Shimmer: faint overtone one octave up
+        const shimmer = ctx.createOscillator();
+        const shimmerGain = ctx.createGain();
+        shimmer.connect(shimmerGain);
+        shimmerGain.connect(ctx.destination);
+        shimmer.type = 'sine';
+        shimmer.frequency.setValueAtTime(freq * 2, noteStart);
+        shimmerGain.gain.setValueAtTime(0, noteStart);
+        shimmerGain.gain.linearRampToValueAtTime(0.03, noteStart + 0.01);
+        shimmerGain.gain.exponentialRampToValueAtTime(0.001, noteEnd + 0.1);
+        shimmer.start(noteStart);
+        shimmer.stop(noteEnd + 0.15);
+      });
+
+    } else if (alertType === 'milestone') {
+      // White noise burst → rising sine sweep → double-ding (C6, E6)
+      const bufferSize = ctx.sampleRate * 0.1;
+      const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const data = noiseBuffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+      const noise = ctx.createBufferSource();
+      noise.buffer = noiseBuffer;
+      const noiseGain = ctx.createGain();
+      noise.connect(noiseGain);
+      noiseGain.connect(ctx.destination);
+      noiseGain.gain.setValueAtTime(0.12, t);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+      noise.start(t);
+      noise.stop(t + 0.1);
+
+      // Rising sine sweep 200→800Hz over 300ms
+      const sweep = ctx.createOscillator();
+      const sweepGain = ctx.createGain();
+      sweep.connect(sweepGain);
+      sweepGain.connect(ctx.destination);
+      sweep.type = 'sine';
+      sweep.frequency.setValueAtTime(200, t + 0.1);
+      sweep.frequency.exponentialRampToValueAtTime(800, t + 0.4);
+      sweepGain.gain.setValueAtTime(0.09, t + 0.1);
+      sweepGain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+      sweep.start(t + 0.1);
+      sweep.stop(t + 0.42);
+
+      // Double-ding: C6 then E6
+      [[1046.5, t + 0.42], [1318.5, t + 0.52]].forEach(([freq, start]) => {
+        const ding = ctx.createOscillator();
+        const dingGain = ctx.createGain();
+        ding.connect(dingGain);
+        dingGain.connect(ctx.destination);
+        ding.type = 'sine';
+        ding.frequency.setValueAtTime(freq, start);
+        dingGain.gain.setValueAtTime(0.15, start);
+        dingGain.gain.exponentialRampToValueAtTime(0.001, start + 0.18);
+        ding.start(start);
+        ding.stop(start + 0.2);
+      });
+
+    } else if (alertType === 'combo') {
+      // Square punch at start, then sawtooth ramp 150→600Hz — short, aggressive
+      const punch = ctx.createOscillator();
+      const punchGain = ctx.createGain();
+      punch.connect(punchGain);
+      punchGain.connect(ctx.destination);
+      punch.type = 'square';
+      punch.frequency.setValueAtTime(150, t);
+      punchGain.gain.setValueAtTime(0.18, t);
+      punchGain.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+      punch.start(t);
+      punch.stop(t + 0.05);
+
+      const ramp = ctx.createOscillator();
+      const rampGain = ctx.createGain();
+      ramp.connect(rampGain);
+      rampGain.connect(ctx.destination);
+      ramp.type = 'sawtooth';
+      ramp.frequency.setValueAtTime(150, t + 0.03);
+      ramp.frequency.exponentialRampToValueAtTime(600, t + 0.18);
+      rampGain.gain.setValueAtTime(0.12, t + 0.03);
+      rampGain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      ramp.start(t + 0.03);
+      ramp.stop(t + 0.2);
+
+    } else if (alertType === 'achievement') {
+      // 6-note fanfare: G4→B4→D5→G5→D5→G5 (50ms each), longer sustain on last
+      const notes = [392.0, 493.88, 587.33, 783.99, 587.33, 783.99];
+      notes.forEach((freq, i) => {
+        const isLast = i === notes.length - 1;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, t);
+        const noteStart = t + i * 0.05;
+        const duration = isLast ? 0.35 : 0.06;
+        gain.gain.setValueAtTime(0, noteStart);
+        gain.gain.linearRampToValueAtTime(0.13, noteStart + 0.005);
+        gain.gain.exponentialRampToValueAtTime(0.001, noteStart + duration);
+        osc.start(noteStart);
+        osc.stop(noteStart + duration + 0.05);
+      });
+    }
+  } catch {
+    // Audio not available
+  }
+}
+
+function playXPSound(): void {
+  try {
+    const ctx = getAlertCtx();
+    const t = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.connect(gain);
     gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1200, t);
+    gain.gain.setValueAtTime(0.03, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.03);
+    osc.start(t);
+    osc.stop(t + 0.035);
+  } catch {
+    // Audio not available
+  }
+}
 
-    if (alertType === 'level-up') {
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(440, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15);
-      osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.3);
-      gain.gain.setValueAtTime(0.12, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
-      osc.start(ctx.currentTime);
-      osc.stop(ctx.currentTime + 0.6);
-    } else if (alertType === 'milestone') {
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(523, ctx.currentTime);
-      osc.frequency.setValueAtTime(659, ctx.currentTime + 0.1);
-      osc.frequency.setValueAtTime(784, ctx.currentTime + 0.2);
-      osc.frequency.setValueAtTime(1047, ctx.currentTime + 0.3);
-      gain.gain.setValueAtTime(0.08, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
-      osc.start(ctx.currentTime);
-      osc.stop(ctx.currentTime + 0.5);
-    } else if (alertType === 'combo') {
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(200, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(1600, ctx.currentTime + 0.2);
-      gain.gain.setValueAtTime(0.06, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
-      osc.start(ctx.currentTime);
-      osc.stop(ctx.currentTime + 0.3);
-    }
+function playComboTickSound(combo: number): void {
+  try {
+    const ctx = getAlertCtx();
+    const t = ctx.currentTime;
+    const freq = 400 * combo;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, t);
+    gain.gain.setValueAtTime(0.06, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+    osc.start(t);
+    osc.stop(t + 0.055);
   } catch {
     // Audio not available
   }
@@ -188,6 +322,7 @@ window.addEventListener('message', (event) => {
       xpBarFill.style.width = `${percent}%`;
       xpLabel.textContent = `+${amount} XP`;
       showXpPopup(amount, 0);
+      playXPSound();
       break;
     }
 
@@ -222,6 +357,7 @@ window.addEventListener('message', (event) => {
       const { combo, multiplier } = message.payload as { combo: number; multiplier: number };
       comboBadge.textContent = `x${combo} ${multiplier}x`;
       comboBadge.classList.add('active');
+      playComboTickSound(combo);
       break;
     }
 
@@ -233,6 +369,41 @@ window.addEventListener('message', (event) => {
     case 'hype-level': {
       const { level: hype } = message.payload as { level: number };
       hypeFill.style.width = `${hype}%`;
+      break;
+    }
+
+    case 'achievement': {
+      const { name, icon, description } = message.payload as { name: string; icon: string; description: string };
+      showAlert('achievement', `${icon} ${name}`);
+      // Add system message to chat
+      const el = document.createElement('div');
+      el.className = 'chat-msg system-msg';
+      el.textContent = `🏆 Achievement Unlocked: ${name} — ${description}`;
+      chatMessages.appendChild(el);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      break;
+    }
+
+    case 'session-recap': {
+      const recap = message.payload as {
+        rank: string; rankColor: string; duration: string;
+        xpEarned: number; levelStart: number; levelEnd: number;
+        titleStart: string; titleEnd: string; leveledUp: boolean;
+        peakViewers: number; peakCombo: number; streakDays: number;
+        achievements: string[]; highlights: string[]; improvements: string[];
+      };
+      // Show recap as a system message block in chat
+      const recapEl = document.createElement('div');
+      recapEl.className = 'chat-msg system-msg';
+      const levelStr = recap.leveledUp
+        ? `Lv.${recap.levelStart} → Lv.${recap.levelEnd} (${recap.titleEnd})`
+        : `Lv.${recap.levelEnd} (${recap.titleEnd})`;
+      const achieveStr = recap.achievements.length > 0
+        ? `\n🏆 ${recap.achievements.join(', ')}`
+        : '';
+      recapEl.innerHTML = `<strong style="color:${recap.rankColor};font-size:16px">${recap.rank}-RANK SESSION</strong><br>${recap.duration} | +${recap.xpEarned} XP | ${levelStr}<br>Peak: ${recap.peakViewers.toLocaleString()} viewers | Combo: x${recap.peakCombo} | Streak: ${recap.streakDays}d${achieveStr}`;
+      chatMessages.appendChild(recapEl);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
       break;
     }
 

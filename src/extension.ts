@@ -10,6 +10,8 @@ import { StreamChatManager } from './stream/stream-chat-manager';
 import { SelfImprovementLoop } from './stream/session-analyzer';
 import { ViewerEngine, getSpikeAmount } from './stream/viewer-engine';
 import { XPEngine, getXPForEvent } from './progression/xp-engine';
+import { AchievementTracker } from './progression/achievements';
+import { generateRecap } from './progression/session-recap';
 import { detectRole, LiveSyncMaster, LiveSyncSlave } from './stream/live-sync';
 
 let streamActive = false;
@@ -123,6 +125,41 @@ export function activate(context: vscode.ExtensionContext): void {
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
+  // Achievement tracker
+  const achievementTracker = new AchievementTracker();
+  let sessionMessagesTyped = 0;
+
+  // Periodic achievement check — every 60 seconds
+  const achievementTimer = setInterval(() => {
+    const profile = xpEngine.getProfile();
+    const newAchievements = achievementTracker.check({
+      totalXP: profile.xp,
+      level: profile.level,
+      sessionMinutes: Math.floor((Date.now() - Date.now()) / 60_000), // gets overwritten below
+      sessionXP: 0,
+      totalSessions: profile.totalSessions,
+      totalCommits: profile.totalCommits,
+      totalPushes: profile.totalPushes,
+      totalErrorsFixed: profile.totalErrorsFixed,
+      peakViewers: profile.peakViewers,
+      streakDays: profile.streakDays,
+      totalWatchMinutes: profile.totalWatchMinutes,
+      currentCombo: xpEngine.getCombo(),
+      peakCombo: 0,
+      messagesTyped: sessionMessagesTyped,
+    });
+
+    for (const achievement of newAchievements) {
+      panelManager.sendAchievement(achievement.name, achievement.icon, achievement.description);
+      panelManager.sendStreamChat(
+        [{ viewer: 'System', color: '#ffd700', text: `🏆 ${achievement.name} unlocked!` }],
+        viewerEngine.getCount(),
+      );
+    }
+  }, 60_000);
+
+  context.subscriptions.push(new vscode.Disposable(() => clearInterval(achievementTimer)));
+
   // XP progression engine (must be created before viewerEngine since milestone callback uses it)
   const xpEngine = new XPEngine({
     onXPGain: (amount, total, source) => {
@@ -206,6 +243,7 @@ export function activate(context: vscode.ExtensionContext): void {
     streamChat.reactToStreamerMessage(text);
     viewerEngine.spike(getSpikeAmount('streamer-chat'));
     viewerEngine.activity();
+    sessionMessagesTyped++;
     // Sync streamer message to slave windows
     const streamerName = config.get<string>('streamerName', 'Streamer');
     syncWrite([{ viewer: streamerName, color: '#ffd700', text }]);
@@ -448,9 +486,18 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
-  // Cleanup
+  // Cleanup — generate session recap on exit
   context.subscriptions.push(
     new vscode.Disposable(() => {
+      // Session recap
+      if (streamChat.isActive()) {
+        const score = xpEngine.endSession();
+        const profile = xpEngine.getProfile();
+        const unlockedNames = achievementTracker.getUnlocked().map(a => a.name);
+        const recap = generateRecap(score, profile, unlockedNames, []);
+        panelManager.sendSessionRecap(recap as unknown as Record<string, unknown>);
+      }
+
       convoWatcher.dispose();
       improvementDisposable?.dispose();
       streamChatDisposable?.dispose();
