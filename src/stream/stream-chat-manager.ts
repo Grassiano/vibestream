@@ -685,7 +685,11 @@ Format:
 
     try {
       const response = await this.callGemini(prompt);
-      if (!response) return;
+      if (!response) {
+        // Backend failed — fallback to instant reactions from roster
+        this.sendFallbackReactions(events, msgCount);
+        return;
+      }
 
       streamLog({ type: 'batch-llm-response', raw: response.slice(0, 500) });
 
@@ -698,7 +702,38 @@ Format:
         this.onChat?.(messages, this.viewerCount);
       }
     } catch {
-      // Silently fail
+      this.sendFallbackReactions(events, msgCount);
+    }
+  }
+
+  /** Fallback when backend is unreachable — use reaction pools from roster */
+  private sendFallbackReactions(events: StreamEvent[], count: number): void {
+    const viewers = pickRandom(this.sessionRoster, count);
+    const messages: ChatMessage[] = [];
+
+    for (const viewer of viewers) {
+      // Find a matching reaction pool for the most recent event
+      for (const evt of events) {
+        const pool = viewer.reactions[evt.type];
+        if (pool && pool.length > 0) {
+          const text = pool[Math.floor(Math.random() * pool.length)];
+          messages.push({ viewer: viewer.name, color: viewer.color, text });
+          break;
+        }
+      }
+      // If no event-specific reaction, use idle message
+      if (!messages.some(m => m.viewer === viewer.name) && viewer.idleMessages.length > 0) {
+        const text = viewer.idleMessages[Math.floor(Math.random() * viewer.idleMessages.length)];
+        messages.push({ viewer: viewer.name, color: viewer.color, text });
+      }
+    }
+
+    if (messages.length > 0) {
+      for (const msg of messages) {
+        this.logChat(msg.viewer, msg.text);
+        streamLog({ type: 'batch-reaction', viewer: msg.viewer, text: msg.text });
+      }
+      this.onChat?.(messages, this.viewerCount);
     }
   }
 

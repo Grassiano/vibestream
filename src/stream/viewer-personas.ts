@@ -57,7 +57,7 @@ const FANBOY: ViewerPersona = {
   idleMessages: [
     'best stream on the platform honestly',
     'why doesnt this guy have more viewers',
-    'been watching 30 min cant look away',
+    'this code is actually clean',
     'everyone needs to see this',
   ],
   streamerReactions: [
@@ -93,7 +93,7 @@ const TROLL: ViewerPersona = {
   idleMessages: [
     'chat is this really coding or is he just moving the cursor around',
     'ive seen faster progress watching paint dry',
-    'at least the background music is good',
+    'the variable names are killing me',
     'imagine paying for this content',
   ],
   streamerReactions: [
@@ -130,7 +130,7 @@ const NOOB: ViewerPersona = {
     'this is my first time watching someone code live its so cool',
     'can someone explain what hes building',
     'how long did it take him to learn all this',
-    'im definitely trying this tomorrow',
+    'i need to learn this',
   ],
   streamerReactions: [
     'omg he talked to us', 'wait really', 'thats so cool',
@@ -199,7 +199,7 @@ const LURKER: ViewerPersona = {
     'activity-speed-run': ['fast'],
   },
   idleMessages: [
-    'been lurking for an hour this is actually good',
+    'ok this is actually good',
     'first message today had to say this is impressive',
     '...',
   ],
@@ -276,7 +276,7 @@ const ISRAELI_TROLL: ViewerPersona = {
   idleMessages: [
     'אתם באמת צופים בבנאדם מקליד',
     'ראיתי קוד יותר טוב מתלמיד כיתה ח',
-    'לפחות המוזיקה ברקע טובה',
+    'שמות המשתנים הורגים אותי',
     'תארו לעצמכם לשלם על זה',
   ],
   streamerReactions: [
@@ -313,7 +313,7 @@ const ISRAELI_NOOB: ViewerPersona = {
     'פעם ראשונה שלי בסטרים של תכנות מגניב',
     'מישהו יכול להסביר מה הוא בונה',
     'כמה זמן לוקח ללמוד את זה',
-    'אני מתחיל מחר בטוח',
+    'חייב ללמוד את זה',
   ],
   streamerReactions: [
     'הוא דיבר אלינו', 'רגע באמת', 'מדהים',
@@ -377,7 +377,7 @@ const CRITIC: ViewerPersona = {
     'honestly not bad for AI assisted development',
     'id structure this project differently but it works',
     'the architecture choices are unconventional but I see the logic',
-    'has anyone actually reviewed his recent commits',
+    'interesting approach but I would refactor that function',
   ],
   streamerReactions: [
     'fair point actually', 'agree with that take', 'interesting perspective',
@@ -413,7 +413,7 @@ const SPANISH_FAN: ViewerPersona = {
     'activity-deep-focus': ['concentrado al máximo', 'no molesten'],
     'activity-speed-run': ['velocidad brutal', 'está volando'],
   },
-  idleMessages: ['mejor stream de código que he visto', 'este tipo es un crack', 'alguien sabe qué está construyendo', 'llevo media hora y no puedo irme'],
+  idleMessages: ['mejor stream de código que he visto', 'este tipo es un crack', 'alguien sabe qué está construyendo', 'este código está limpio'],
   streamerReactions: ['habló el crack', 'grande', 'el mejor', 'se nota la clase', 'crack total'],
 };
 
@@ -473,7 +473,7 @@ const PORTUGUESE_FAN: ViewerPersona = {
     'activity-deep-focus': ['tá focado demais', 'não atrapalha'],
     'activity-speed-run': ['velocidade insana', 'tá voando'],
   },
-  idleMessages: ['melhor stream de código que já vi', 'esse cara é monstro', 'tô há meia hora e não consigo sair'],
+  idleMessages: ['melhor stream de código que já vi', 'esse cara é monstro', 'esse código tá limpo demais'],
   streamerReactions: ['ele falou', 'monstro', 'brabo demais', 'o cara é fera', 'lenda'],
 };
 
@@ -593,7 +593,7 @@ const GERMAN_FAN: ViewerPersona = {
     'activity-deep-focus': ['voll konzentriert', 'nicht stören'],
     'activity-speed-run': ['irre Geschwindigkeit', 'er fliegt'],
   },
-  idleMessages: ['bester Code Stream den ich je gesehen habe', 'der Typ ist ein Genie', 'bin schon eine halbe Stunde hier'],
+  idleMessages: ['bester Code Stream den ich je gesehen habe', 'der Typ ist ein Genie', 'der Code ist sauber'],
   streamerReactions: ['er hat gesprochen', 'der Chef', 'stark', 'Respekt', 'Legende'],
 };
 
