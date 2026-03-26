@@ -61,14 +61,44 @@ function isProcessAlive(pid: number): boolean {
 
 // ═══ Master — writes state, owns the stream ═══
 
+const HEARTBEAT_INTERVAL_MS = 5_000; // Refresh lock every 5s
+const HEARTBEAT_STALE_MS = 15_000;   // Lock is dead if >15s old
+
+interface LockData {
+  pid: number;
+  ts: number; // Date.now() heartbeat
+}
+
+function writeLock(): void {
+  const data: LockData = { pid: process.pid, ts: Date.now() };
+  fs.writeFileSync(LOCK_PATH, JSON.stringify(data));
+}
+
+function readLock(): LockData | null {
+  try {
+    return JSON.parse(fs.readFileSync(LOCK_PATH, 'utf-8')) as LockData;
+  } catch {
+    return null;
+  }
+}
+
+function isLockAlive(): boolean {
+  const lock = readLock();
+  if (!lock) return false;
+  // Lock is alive if heartbeat is fresh AND it's not us
+  return lock.pid !== process.pid && (Date.now() - lock.ts) < HEARTBEAT_STALE_MS;
+}
+
 export class LiveSyncMaster {
   private allMessages: LiveMessage[] = [];
   private readonly MAX_MESSAGES = 30;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     ensureDir();
-    // Claim master lock
-    fs.writeFileSync(LOCK_PATH, String(process.pid));
+    writeLock();
+    // Keep heartbeat alive
+    this.heartbeatTimer = setInterval(() => writeLock(), HEARTBEAT_INTERVAL_MS);
   }
 
   pushMessages(messages: LiveMessage[]): void {
@@ -100,10 +130,16 @@ export class LiveSyncMaster {
   }
 
   dispose(): void {
+    // Stop heartbeat
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+
     // Release lock
     try {
-      const lockPid = fs.readFileSync(LOCK_PATH, 'utf-8').trim();
-      if (lockPid === String(process.pid)) {
+      const lock = readLock();
+      if (lock && lock.pid === process.pid) {
         fs.unlinkSync(LOCK_PATH);
       }
     } catch {
@@ -259,17 +295,10 @@ export type SyncRole = 'master' | 'slave';
 export function detectRole(): SyncRole {
   ensureDir();
 
+  // Heartbeat-based lock: if another process wrote a fresh heartbeat (<15s ago), we're slave
   try {
-    if (fs.existsSync(LOCK_PATH)) {
-      const lockPid = parseInt(fs.readFileSync(LOCK_PATH, 'utf-8').trim(), 10);
-
-      // If the lock holder is still alive and it's not us → we're slave
-      if (lockPid !== process.pid && isProcessAlive(lockPid)) {
-        return 'slave';
-      }
-
-      // Lock holder is dead → take over as master
-      fs.unlinkSync(LOCK_PATH);
+    if (isLockAlive()) {
+      return 'slave';
     }
   } catch {
     // Can't read lock → assume master

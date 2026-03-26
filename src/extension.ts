@@ -100,11 +100,23 @@ export function activate(context: vscode.ExtensionContext): void {
     syncSlaveDisposable = slave.start();
     panelManager.setStreamMode(true);
     updateStatusBar(statusBarItem, true);
-    statusBarItem.tooltip = 'VibeStream SLAVE — mirroring master window';
+    statusBarItem.text = '$(broadcast) VibeStream (synced)';
+    statusBarItem.tooltip = 'VibeStream — synced with another window';
+    vscode.window.showInformationMessage('VibeStream — joined existing session.');
 
     context.subscriptions.push(new vscode.Disposable(() => {
       syncSlaveDisposable?.dispose();
     }));
+
+    // Slave can still type in chat — message shows locally + syncs via state file
+    panelManager.onStreamerChat = (text: string) => {
+      const streamerName = config.get<string>('streamerName', 'Streamer');
+      // Show locally (slave renders it)
+      panelManager.sendStreamChat(
+        [{ viewer: streamerName, color: '#ffd700', text }],
+        currentViewerCount,
+      );
+    };
 
     // Slave registers minimal commands
     context.subscriptions.push(
